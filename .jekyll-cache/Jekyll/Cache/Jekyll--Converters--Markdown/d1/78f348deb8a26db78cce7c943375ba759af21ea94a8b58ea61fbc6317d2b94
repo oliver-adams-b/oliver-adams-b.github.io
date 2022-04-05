@@ -1,0 +1,338 @@
+I""�<h1 id="overview">Overview:</h1>
+
+<p>For six months in late 2020 I contributed to the Earth Species open source project. The Earth Species Project’s mission is to decode non-human language, primarily centered on Whale noise translation. You can find their website <a href="https://www.earthspecies.org/">here</a>. I worked on decoding a curated data set of Egyptian fruit bat squeaks, created by <a href="http://www.yossiyovel.com/index.php/publications">Yossi Yovel</a> and his team. My work extended and improved the results published in <a href="https://www.nature.com/articles/sdata2017143">this</a> paper published by Yovel in Nature. I added a custom preprocessing step to a novel model architecture which greatly outperformed the benchmarks set by Yovel. You can find some of my results posted on the ESP github page <a href="https://github.com/earthspecies/library">here</a>, and you can find all of the code I wrote including what I did not publish to the community <a href="https://github.com/oliver-adams-b/library/tree/main/egyptian_fruit_bat">here</a></p>
+
+<h1 id="primary-results">Primary Results:</h1>
+
+<p>As published in Yovel’s paper, the context of a bat vocalization could be predicted with 61% accuracy across four different context classes. I was able to create model architecture, fully implemented below in pytorch/fastai, which achieves 67% accuracy on the same task. Using the very same architecture, I was also able to drastically improve the accuracy of predicting the gender of a bat given its’ vocalization. The results for these classification tasks are shown below. I also conducted many exploratory studies on different methods of representing/embedding bat vocalizations, more information here <a href="https://github.com/oliver-adams-b/library/tree/main/egyptian_fruit_bat">here</a>.</p>
+
+<p><img src="/img/posts/esp/output_22_0.png" alt="png" />
+<img src="/img/posts/esp/output_13_0.png" alt="png" /></p>
+
+<h1 id="code-walkthrough">Code Walkthrough:</h1>
+
+<p>In this notebook we will predict the gender of an Egyptian fruit bat given only a vocalization sample. We’ll use a CQ transformed version of the tiny subset of annotated vocalization data to speed up the training time (a set of CQ transformed vocalizations rather than just a set of annotated vocalizations). We will be testing the effect of the number of masked input channels on the performance of a given model, and so for each model architecture we will run many samples to get a better idea about average performance for a given number of input channels. More information on this sequential masking of the input data can be found <a href="https://github.com/oliver-adams-b/library/blob/main/egyptian_fruit_bat/efb_context_labeler_pos_enc_comparison.ipynb">here</a>.</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">fastai.vision.all</span> <span class="kn">import</span> <span class="o">*</span>
+<span class="kn">import</span> <span class="nn">torch</span>
+<span class="kn">from</span> <span class="nn">PIL</span> <span class="kn">import</span> <span class="n">Image</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="n">np</span>
+<span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="n">plt</span>
+</code></pre></div></div>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">dest_path</span> <span class="o">=</span> <span class="s">"/home/jupyter/data/"</span>
+<span class="n">path</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="s">"{}egyptian_fruit_bat_annotated_tiny_cqt"</span><span class="p">.</span><span class="nb">format</span><span class="p">(</span><span class="n">dest_path</span><span class="p">))</span>
+<span class="n">files</span> <span class="o">=</span> <span class="p">[</span><span class="nb">str</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">get_image_files</span><span class="p">(</span><span class="n">path</span><span class="p">)]</span>
+<span class="n">annot_path</span> <span class="o">=</span> <span class="s">"{}/egyptian_fruit_bat_annotated_tiny/better_annotations.csv"</span><span class="p">.</span><span class="nb">format</span><span class="p">(</span><span class="n">dest_path</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>We are given bat ID’s not bat gender from the annotations file, but we can use the metadata for the datasets to figure out which bat ID’s correspond to male vs. female bats. As noted in the metadata, all ID’s which are negative or zero correspond to uncertain/unknown labels, and so we throw out all samples where this is the case.</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">format_annotations</span><span class="p">(</span><span class="n">annot_path</span><span class="p">):</span>
+    <span class="n">annotations</span> <span class="o">=</span> <span class="n">pd</span><span class="p">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">annot_path</span><span class="p">)</span>
+    <span class="n">context_dict</span> <span class="o">=</span> <span class="p">{</span><span class="mi">0</span><span class="p">:</span><span class="s">"unknown"</span><span class="p">,</span> <span class="mi">1</span><span class="p">:</span><span class="s">"separation"</span><span class="p">,</span> <span class="mi">2</span><span class="p">:</span><span class="s">"biting"</span><span class="p">,</span> 
+                    <span class="mi">3</span><span class="p">:</span><span class="s">"feeding"</span><span class="p">,</span> <span class="mi">4</span><span class="p">:</span><span class="s">"fighting"</span><span class="p">,</span> <span class="mi">5</span><span class="p">:</span><span class="s">"grooming"</span><span class="p">,</span> 
+                    <span class="mi">6</span><span class="p">:</span><span class="s">"isolation"</span><span class="p">,</span> <span class="mi">7</span><span class="p">:</span><span class="s">"kissing"</span><span class="p">,</span> <span class="mi">8</span><span class="p">:</span><span class="s">"landing"</span><span class="p">,</span> 
+                    <span class="mi">9</span><span class="p">:</span><span class="s">"mating protest"</span><span class="p">,</span> <span class="mi">10</span><span class="p">:</span><span class="s">"threat-like"</span><span class="p">,</span> 
+                    <span class="mi">11</span><span class="p">:</span><span class="s">"general"</span><span class="p">,</span> <span class="mi">12</span><span class="p">:</span><span class="s">"sleeping"</span><span class="p">}</span>
+
+    <span class="n">annotations</span><span class="p">[</span><span class="s">"Context desc."</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="n">context_dict</span><span class="p">[</span><span class="n">x</span><span class="p">]</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">annotations</span><span class="p">[</span><span class="s">"Context"</span><span class="p">]]</span>
+    <span class="n">annotations</span><span class="p">[</span><span class="s">"File name"</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="n">x</span><span class="p">.</span><span class="n">replace</span><span class="p">(</span><span class="s">".WAV"</span><span class="p">,</span> <span class="s">".png"</span><span class="p">)</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">annotations</span><span class="p">[</span><span class="s">"File name"</span><span class="p">]</span> <span class="p">]</span>
+    <span class="n">annotations</span><span class="p">[</span><span class="s">"File path"</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="s">"{}/{}/{}"</span><span class="p">.</span><span class="nb">format</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">path</span><span class="p">),</span>
+                                                  <span class="nb">str</span><span class="p">(</span><span class="n">annotations</span><span class="p">[</span><span class="s">'File folder'</span><span class="p">][</span><span class="n">i</span><span class="p">]),</span> 
+                                                  <span class="nb">str</span><span class="p">(</span><span class="n">annotations</span><span class="p">[</span><span class="s">'File name'</span><span class="p">][</span><span class="n">i</span><span class="p">]))</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">annotations</span><span class="p">.</span><span class="n">index</span><span class="p">]</span>
+    <span class="n">annotations</span> <span class="o">=</span> <span class="n">annotations</span><span class="p">[</span><span class="n">annotations</span><span class="p">[</span><span class="s">"File path"</span><span class="p">].</span><span class="n">isin</span><span class="p">(</span><span class="n">files</span><span class="p">)]</span>
+    <span class="n">annotations</span> <span class="o">=</span> <span class="n">annotations</span><span class="p">.</span><span class="n">drop_duplicates</span><span class="p">(</span><span class="n">subset</span> <span class="o">=</span> <span class="p">[</span><span class="s">'File path'</span><span class="p">])</span>
+    <span class="k">return</span> <span class="n">annotations</span>
+
+<span class="c1">#a direct copy of a table found in the metadata:
+</span><span class="n">addressee_sex_dict</span> <span class="o">=</span> <span class="p">{</span><span class="mi">101</span><span class="p">:</span><span class="s">"M"</span><span class="p">,</span> <span class="mi">102</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> <span class="mi">103</span><span class="p">:</span><span class="s">"M"</span><span class="p">,</span> <span class="mi">104</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> 
+                      <span class="mi">105</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> <span class="mi">106</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> <span class="mi">107</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> <span class="mi">108</span><span class="p">:</span><span class="bp">None</span><span class="p">,</span> 
+                      <span class="mi">109</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> <span class="mi">110</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> <span class="mi">111</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> <span class="mi">112</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> 
+                      <span class="mi">113</span><span class="p">:</span><span class="bp">None</span><span class="p">,</span> <span class="mi">114</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> <span class="mi">115</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> <span class="mi">116</span><span class="p">:</span><span class="s">"M"</span><span class="p">,</span> <span class="mi">118</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> 
+                      <span class="mi">119</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> <span class="mi">120</span><span class="p">:</span><span class="bp">None</span><span class="p">,</span> <span class="mi">201</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> <span class="mi">202</span><span class="p">:</span><span class="bp">None</span><span class="p">,</span>
+                      <span class="mi">203</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> <span class="mi">204</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> <span class="mi">205</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> <span class="mi">207</span><span class="p">:</span><span class="s">"M"</span><span class="p">,</span> 
+                      <span class="mi">208</span><span class="p">:</span><span class="s">"M"</span><span class="p">,</span> <span class="mi">209</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> <span class="mi">210</span><span class="p">:</span><span class="bp">None</span><span class="p">,</span> <span class="mi">211</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> 
+                      <span class="mi">212</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> <span class="mi">213</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> <span class="mi">214</span><span class="p">:</span><span class="bp">None</span><span class="p">,</span> <span class="mi">215</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> 
+                      <span class="mi">216</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> <span class="mi">217</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> <span class="mi">218</span><span class="p">:</span><span class="s">"M"</span><span class="p">,</span> <span class="mi">220</span><span class="p">:</span><span class="bp">None</span><span class="p">,</span> <span class="mi">221</span><span class="p">:</span><span class="s">"M"</span><span class="p">,</span> 
+                      <span class="mi">222</span><span class="p">:</span><span class="bp">None</span><span class="p">,</span> <span class="mi">223</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> <span class="mi">224</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> <span class="mi">225</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> 
+                      <span class="mi">226</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> <span class="mi">228</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> <span class="mi">230</span><span class="p">:</span><span class="bp">None</span><span class="p">,</span> <span class="mi">231</span><span class="p">:</span><span class="s">"M"</span><span class="p">,</span> 
+                      <span class="mi">232</span><span class="p">:</span><span class="s">"F"</span><span class="p">,</span> <span class="mi">233</span><span class="p">:</span><span class="s">"M"</span><span class="p">}</span>
+
+<span class="n">annotations</span> <span class="o">=</span> <span class="n">format_annotations</span><span class="p">(</span><span class="n">annot_path</span><span class="p">)</span>
+<span class="n">annotations</span> <span class="o">=</span> <span class="n">annotations</span><span class="p">[</span><span class="n">annotations</span><span class="p">[</span><span class="s">"Addressee"</span><span class="p">]</span><span class="o">&gt;</span><span class="mi">0</span><span class="p">]</span>
+<span class="n">annotations</span><span class="p">[</span><span class="s">"Addressee sex"</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="n">addressee_sex_dict</span><span class="p">[</span><span class="n">x</span><span class="p">]</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">annotations</span><span class="p">[</span><span class="s">"Addressee"</span><span class="p">]]</span>
+<span class="n">annotations</span> <span class="o">=</span> <span class="n">annotations</span><span class="p">.</span><span class="n">dropna</span><span class="p">()</span>
+<span class="n">annotations</span><span class="p">.</span><span class="n">head</span><span class="p">()</span>
+
+</code></pre></div></div>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">annotations</span><span class="p">[</span><span class="s">"Addressee sex"</span><span class="p">].</span><span class="n">value_counts</span><span class="p">().</span><span class="n">plot</span><span class="p">(</span><span class="n">kind</span> <span class="o">=</span> <span class="s">'bar'</span><span class="p">,</span> <span class="n">title</span> <span class="o">=</span> <span class="s">"Class Label Distribution"</span><span class="p">,</span> <span class="n">ylabel</span> <span class="o">=</span> <span class="s">"count"</span><span class="p">)</span>
+<span class="n">plt</span><span class="p">.</span><span class="n">show</span><span class="p">()</span>
+</code></pre></div></div>
+
+<p><img src="/img/posts/esp/output_5_0.png" alt="png" /></p>
+
+<p>Next, we’ll create some utility functions to help us create our models and dataloaders.</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">get_x</span><span class="p">(</span><span class="n">p</span><span class="p">):</span>
+    <span class="c1">#returns a gs numpy array
+</span>    <span class="k">return</span>  <span class="n">np</span><span class="p">.</span><span class="n">array</span><span class="p">(</span><span class="n">Image</span><span class="p">.</span><span class="nb">open</span><span class="p">(</span><span class="n">p</span><span class="p">))[:,</span> <span class="p">:,</span> <span class="mi">0</span><span class="p">]</span>
+
+<span class="k">def</span> <span class="nf">pos_enc2d_np</span><span class="p">(</span><span class="n">gs_im</span><span class="p">,</span> <span class="n">out_c</span> <span class="o">=</span> <span class="mi">5</span><span class="p">,</span> <span class="n">eta</span> <span class="o">=</span> <span class="mf">0.05</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">constrain</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">x</span> <span class="o">&gt;</span> <span class="n">b</span><span class="p">:</span> <span class="k">return</span> <span class="n">b</span>
+        <span class="k">if</span> <span class="n">x</span> <span class="o">&lt;</span> <span class="n">a</span><span class="p">:</span> <span class="k">return</span> <span class="n">a</span>
+        <span class="k">else</span><span class="p">:</span> <span class="k">return</span> <span class="n">x</span>
+
+    <span class="k">def</span> <span class="nf">make_mask</span><span class="p">(</span><span class="n">shape</span><span class="p">,</span> <span class="n">start</span><span class="p">,</span> <span class="n">end</span><span class="p">):</span>
+        <span class="c1">#returns a vertical mask:
+</span>        <span class="n">block_0</span> <span class="o">=</span> <span class="n">np</span><span class="p">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">start</span><span class="p">))</span>
+        <span class="n">block_1</span> <span class="o">=</span> <span class="n">np</span><span class="p">.</span><span class="n">ones</span><span class="p">((</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">end</span> <span class="o">-</span> <span class="n">start</span><span class="p">))</span>
+        <span class="n">block_2</span> <span class="o">=</span> <span class="n">np</span><span class="p">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">constrain</span><span class="p">(</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">-</span> <span class="n">end</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])))</span>
+        <span class="n">mask</span> <span class="o">=</span> <span class="n">np</span><span class="p">.</span><span class="n">block</span><span class="p">([</span><span class="n">block_0</span><span class="p">,</span> <span class="n">block_1</span><span class="p">,</span> <span class="n">block_2</span><span class="p">])</span>
+        
+        <span class="k">if</span> <span class="n">mask</span><span class="p">.</span><span class="n">shape</span> <span class="o">!=</span> <span class="n">shape</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">mask</span><span class="p">[:</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="p">:</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]]</span>
+        <span class="k">else</span><span class="p">:</span> <span class="k">return</span> <span class="n">mask</span>
+
+    <span class="n">window_widths</span> <span class="o">=</span> <span class="n">np</span><span class="p">.</span><span class="n">random</span><span class="p">.</span><span class="n">uniform</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="mi">1</span><span class="o">/</span><span class="p">(</span><span class="n">out_c</span><span class="o">-</span><span class="mf">1.05</span><span class="p">))</span> <span class="o">-</span> <span class="n">eta</span><span class="p">,</span> 
+                                      <span class="nb">float</span><span class="p">(</span><span class="mi">1</span><span class="o">/</span><span class="p">(</span><span class="n">out_c</span><span class="o">-</span><span class="mf">1.05</span><span class="p">))</span> <span class="o">+</span> <span class="n">eta</span><span class="p">,</span> <span class="n">out_c</span><span class="p">)</span>
+    <span class="n">window_widths</span> <span class="o">=</span> <span class="n">np</span><span class="p">.</span><span class="nb">round</span><span class="p">(</span><span class="n">window_widths</span><span class="o">*</span><span class="n">gs_im</span><span class="p">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]).</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>   
+    
+    <span class="n">window_starts</span> <span class="o">=</span> <span class="n">np</span><span class="p">.</span><span class="n">random</span><span class="p">.</span><span class="n">uniform</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="mi">1</span><span class="o">/</span><span class="n">out_c</span><span class="p">)</span> <span class="o">-</span> <span class="n">eta</span><span class="p">,</span> 
+                                      <span class="nb">float</span><span class="p">(</span><span class="mi">1</span><span class="o">/</span><span class="n">out_c</span><span class="p">)</span> <span class="o">+</span> <span class="n">eta</span><span class="p">,</span> <span class="n">out_c</span><span class="p">)</span>
+    
+    <span class="n">window_starts</span> <span class="o">=</span> <span class="n">np</span><span class="p">.</span><span class="n">array</span><span class="p">([</span><span class="nb">sum</span><span class="p">(</span><span class="n">window_starts</span><span class="p">[</span><span class="mi">0</span><span class="p">:</span><span class="n">i</span><span class="p">])</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">out_c</span><span class="p">)])</span>
+    <span class="n">window_starts</span> <span class="o">=</span> <span class="n">np</span><span class="p">.</span><span class="nb">round</span><span class="p">(</span><span class="n">window_starts</span><span class="o">*</span><span class="n">gs_im</span><span class="p">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]).</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>   
+    <span class="n">new_ims</span> <span class="o">=</span> <span class="p">[]</span>
+    
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">out_c</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">out_c</span><span class="p">:</span>
+            <span class="n">temp_mask</span> <span class="o">=</span> <span class="n">make_mask</span><span class="p">(</span><span class="n">gs_im</span><span class="p">.</span><span class="n">shape</span><span class="p">,</span> 
+                                  <span class="n">start</span> <span class="o">=</span> <span class="n">window_starts</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> 
+                                  <span class="n">end</span> <span class="o">=</span> <span class="n">window_starts</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">+</span> <span class="n">window_widths</span><span class="p">[</span><span class="n">i</span><span class="p">])</span>
+        <span class="k">if</span> <span class="n">i</span> <span class="o">==</span> <span class="n">out_c</span><span class="p">:</span>
+            <span class="c1">#making sure the last mask gets the last of the image:
+</span>            <span class="n">temp_mask</span> <span class="o">=</span> <span class="n">make_mask</span><span class="p">(</span><span class="n">gs_im</span><span class="p">.</span><span class="n">shape</span><span class="p">,</span> 
+                                  <span class="n">start</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">gs_im</span><span class="p">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">*</span><span class="n">out_c</span><span class="p">),</span> 
+                                  <span class="n">end</span> <span class="o">=</span> <span class="n">gs_im</span><span class="p">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+
+        <span class="n">new_ims</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="n">np</span><span class="p">.</span><span class="n">multiply</span><span class="p">(</span><span class="n">temp_mask</span><span class="p">,</span> <span class="n">gs_im</span><span class="p">))</span>
+    <span class="k">return</span> <span class="n">np</span><span class="p">.</span><span class="n">dstack</span><span class="p">(</span><span class="n">new_ims</span><span class="p">)</span> 
+
+<span class="k">def</span> <span class="nf">pos_enc2d_layer</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">out_c</span> <span class="o">=</span> <span class="mi">6</span><span class="p">,</span> <span class="n">eta</span> <span class="o">=</span> <span class="mf">0.05</span><span class="p">):</span>
+    <span class="c1">#adapting the pos_enc2d to act as a layer in the model:
+</span>    <span class="n">bs</span><span class="p">,</span> <span class="n">channels</span><span class="p">,</span> <span class="n">h</span><span class="p">,</span> <span class="n">w</span> <span class="o">=</span> <span class="n">tensor</span><span class="p">.</span><span class="n">shape</span>
+    <span class="k">assert</span> <span class="n">channels</span> <span class="o">==</span> <span class="mi">1</span><span class="p">,</span> <span class="s">"Input should have one channel!"</span>
+    <span class="n">np_tensor</span> <span class="o">=</span> <span class="n">np</span><span class="p">.</span><span class="n">array</span><span class="p">(</span><span class="n">tensor</span><span class="p">.</span><span class="n">cpu</span><span class="p">())</span> <span class="c1">#a little hacky! probably could be better!
+</span>    <span class="n">stack</span> <span class="o">=</span> <span class="p">[</span><span class="n">pos_enc2d_np</span><span class="p">(</span><span class="n">np_tensor</span><span class="p">[</span><span class="n">i</span><span class="p">,:,</span> <span class="p">:,</span> <span class="p">:].</span><span class="n">reshape</span><span class="p">(</span><span class="n">h</span><span class="p">,</span> <span class="n">w</span><span class="p">),</span> <span class="n">out_c</span><span class="p">,</span> <span class="n">eta</span><span class="p">)</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">bs</span><span class="p">)]</span>
+    <span class="n">stack</span>  <span class="o">=</span> <span class="n">np</span><span class="p">.</span><span class="n">array</span><span class="p">(</span><span class="n">stack</span><span class="p">).</span><span class="n">reshape</span><span class="p">(</span><span class="n">bs</span><span class="p">,</span> <span class="n">out_c</span><span class="p">,</span> <span class="n">h</span><span class="p">,</span> <span class="n">w</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">torch</span><span class="p">.</span><span class="n">from_numpy</span><span class="p">(</span><span class="n">stack</span><span class="p">).</span><span class="nb">type</span><span class="p">(</span><span class="n">torch</span><span class="p">.</span><span class="n">cuda</span><span class="p">.</span><span class="n">FloatTensor</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">get_y</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">annotations</span> <span class="o">=</span> <span class="n">annotations</span><span class="p">,</span> <span class="n">class_label</span> <span class="o">=</span> <span class="s">"Addressee sex"</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">annotations</span><span class="p">.</span><span class="n">loc</span><span class="p">[</span><span class="n">annotations</span><span class="p">[</span><span class="s">'File path'</span><span class="p">]</span> <span class="o">==</span> <span class="n">p</span><span class="p">][</span><span class="n">class_label</span><span class="p">].</span><span class="n">values</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+
+<span class="k">def</span> <span class="nf">get_items</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">annotations</span> <span class="o">=</span> <span class="n">annotations</span><span class="p">):</span>
+    <span class="n">temp_files</span> <span class="o">=</span> <span class="p">[</span><span class="nb">str</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">get_image_files</span><span class="p">(</span><span class="n">path</span><span class="p">)]</span>
+    <span class="k">return</span> <span class="n">annotations</span><span class="p">.</span><span class="n">loc</span><span class="p">[</span><span class="n">annotations</span><span class="p">[</span><span class="s">'File path'</span><span class="p">].</span><span class="n">isin</span><span class="p">(</span><span class="n">temp_files</span><span class="p">)][</span><span class="s">'File path'</span><span class="p">].</span><span class="n">values</span>
+
+<span class="n">items</span> <span class="o">=</span> <span class="n">get_items</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>
+<span class="k">print</span><span class="p">(</span><span class="n">get_y</span><span class="p">(</span><span class="n">items</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
+</code></pre></div></div>
+
+<p>Now to create our model architecture. We’ll use a pretrained resnet18 with a custom model head parameterized by the provided number of input channels. With <code class="language-plaintext highlighter-rouge">n_c_layers = 1</code> we have no encoder head.</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">class</span> <span class="nc">res_model</span><span class="p">(</span><span class="n">Module</span><span class="p">):</span>    
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">n_c_layers</span> <span class="o">=</span> <span class="mi">5</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">().</span><span class="n">__init__</span><span class="p">()</span>
+        
+        <span class="bp">self</span><span class="p">.</span><span class="n">with_pos_enc</span> <span class="o">=</span> <span class="n">n_c_layers</span> <span class="o">!=</span> <span class="mi">1</span>
+        <span class="bp">self</span><span class="p">.</span><span class="n">in_c</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">n_enc_layers</span><span class="p">)[</span><span class="bp">self</span><span class="p">.</span><span class="n">with_pos_enc</span><span class="p">]</span>
+        <span class="bp">self</span><span class="p">.</span><span class="n">encoder_head</span> <span class="o">=</span> <span class="n">nn</span><span class="p">.</span><span class="n">Sequential</span><span class="p">(</span>
+                                    <span class="n">nn</span><span class="p">.</span><span class="n">Conv2d</span><span class="p">(</span><span class="n">in_channels</span> <span class="o">=</span> <span class="bp">self</span><span class="p">.</span><span class="n">in_c</span><span class="p">,</span>     
+                                             <span class="n">out_channels</span> <span class="o">=</span> <span class="mi">3</span><span class="p">,</span> 
+                                             <span class="n">kernel_size</span> <span class="o">=</span> <span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span> 
+                                             <span class="n">stride</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> 
+                                             <span class="n">padding</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> 
+                                             <span class="n">bias</span> <span class="o">=</span> <span class="bp">True</span><span class="p">),</span>
+                                    <span class="n">nn</span><span class="p">.</span><span class="n">ReLU</span><span class="p">(</span><span class="n">inplace</span> <span class="o">=</span> <span class="bp">True</span><span class="p">))</span>
+        
+        <span class="bp">self</span><span class="p">.</span><span class="n">res_block</span> <span class="o">=</span> <span class="n">resnet18</span><span class="p">()</span>
+        
+    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="p">.</span><span class="n">with_pos_enc</span><span class="p">:</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">pos_enc2d_layer</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">out_c</span> <span class="o">=</span> <span class="bp">self</span><span class="p">.</span><span class="n">in_c</span><span class="p">)</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="p">.</span><span class="n">encoder_head</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="p">.</span><span class="n">res_block</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>We’ll also use a simple no overfitting callback during training so there is no guesswork with deciding how many epochs the various models should be trained for. This callback raises a <code class="language-plaintext highlighter-rouge">CancelFitException()</code> when the training loss is within <code class="language-plaintext highlighter-rouge">min_delta</code> of the validation loss for more than a provided number of epochs (<code class="language-plaintext highlighter-rouge">patience</code>).</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">class</span> <span class="nc">NoOverfittingCB</span><span class="p">(</span><span class="n">Callback</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> 
+                 <span class="n">patience</span> <span class="o">=</span> <span class="mi">3</span><span class="p">,</span> 
+                 <span class="n">min_delta</span> <span class="o">=</span> <span class="mf">0.05</span><span class="p">,</span> 
+                 <span class="n">reset_on_fit</span> <span class="o">=</span> <span class="bp">True</span><span class="p">):</span>
+        <span class="bp">self</span><span class="p">.</span><span class="n">patience</span><span class="p">,</span> <span class="bp">self</span><span class="p">.</span><span class="n">min_delta</span><span class="p">,</span> <span class="bp">self</span><span class="p">.</span><span class="n">reset_on_fit</span><span class="p">,</span> <span class="bp">self</span><span class="p">.</span><span class="n">wait</span> <span class="o">=</span> <span class="n">patience</span><span class="p">,</span> <span class="n">min_delta</span><span class="p">,</span> <span class="n">reset_on_fit</span><span class="p">,</span> <span class="mi">0</span>
+    
+    <span class="k">def</span> <span class="nf">before_fit</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="p">.</span><span class="n">run</span> <span class="o">=</span> <span class="ow">not</span> <span class="nb">hasattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s">"lr_finder"</span><span class="p">)</span> <span class="ow">and</span> <span class="ow">not</span> <span class="nb">hasattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s">"gather_preds"</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="p">.</span><span class="n">reset_on_fit</span> <span class="ow">is</span> <span class="bp">None</span><span class="p">:</span> <span class="bp">self</span><span class="p">.</span><span class="n">wait</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+        <span class="bp">self</span><span class="p">.</span><span class="n">vidx</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">recorder</span><span class="p">.</span><span class="n">metric_names</span><span class="p">[</span><span class="mi">1</span><span class="p">:]).</span><span class="n">index</span><span class="p">(</span><span class="s">"valid_loss"</span><span class="p">)</span>
+        <span class="bp">self</span><span class="p">.</span><span class="n">lidx</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">recorder</span><span class="p">.</span><span class="n">metric_names</span><span class="p">[</span><span class="mi">1</span><span class="p">:]).</span><span class="n">index</span><span class="p">(</span><span class="s">"train_loss"</span><span class="p">)</span>
+    
+    <span class="k">def</span> <span class="nf">after_epoch</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">vval</span> <span class="o">=</span> <span class="bp">self</span><span class="p">.</span><span class="n">recorder</span><span class="p">.</span><span class="n">values</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="bp">self</span><span class="p">.</span><span class="n">vidx</span><span class="p">]</span>
+        <span class="n">tval</span> <span class="o">=</span> <span class="bp">self</span><span class="p">.</span><span class="n">recorder</span><span class="p">.</span><span class="n">values</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="bp">self</span><span class="p">.</span><span class="n">lidx</span><span class="p">]</span>
+        
+        <span class="n">diff</span> <span class="o">=</span> <span class="n">tval</span> <span class="o">-</span> <span class="n">vval</span> <span class="o">+</span> <span class="bp">self</span><span class="p">.</span><span class="n">min_delta</span>
+        
+        <span class="k">if</span> <span class="n">diff</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="bp">self</span><span class="p">.</span><span class="n">wait</span> <span class="o">+=</span> <span class="mi">1</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="p">.</span><span class="n">wait</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="p">.</span><span class="n">wait</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="p">.</span><span class="n">patience</span><span class="p">:</span>
+                <span class="k">print</span><span class="p">(</span><span class="s">"Fit cancelled due to overfitting..."</span><span class="p">)</span>
+                <span class="k">raise</span> <span class="n">CancelFitException</span><span class="p">()</span>
+                
+    <span class="k">def</span> <span class="nf">after_fit</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span> 
+        <span class="bp">self</span><span class="p">.</span><span class="n">run</span> <span class="o">=</span> <span class="bp">True</span>
+        
+</code></pre></div></div>
+
+<p>Now packaging most of the above functions into functions that grab a dataloader and model. The dataloader uses random splitting, and each model uses the above no overfitting callback as well as an early stopping callback.</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">get_random_dls</span><span class="p">():</span>
+    <span class="k">return</span> <span class="n">DataBlock</span><span class="p">(</span><span class="n">blocks</span> <span class="o">=</span> <span class="p">(</span><span class="n">ImageBlock</span><span class="p">,</span> <span class="n">CategoryBlock</span><span class="p">),</span> 
+               <span class="n">get_items</span> <span class="o">=</span> <span class="n">get_items</span><span class="p">,</span> 
+               <span class="n">get_x</span> <span class="o">=</span> <span class="n">get_x</span><span class="p">,</span> 
+               <span class="n">get_y</span> <span class="o">=</span> <span class="n">get_y</span><span class="p">,</span> 
+               <span class="n">splitter</span> <span class="o">=</span> <span class="n">RandomSplitter</span><span class="p">(</span><span class="n">seed</span> <span class="o">=</span> <span class="mi">42</span><span class="p">)).</span><span class="n">dataloaders</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> 
+                                                                 <span class="n">bs</span> <span class="o">=</span> <span class="mi">32</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">get_learner_with_c</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">dls</span><span class="p">):</span>
+    <span class="n">learn</span> <span class="o">=</span> <span class="n">Learner</span><span class="p">(</span><span class="n">dls</span><span class="p">,</span> <span class="n">res_model</span><span class="p">(</span><span class="n">n_c_layers</span> <span class="o">=</span> <span class="n">c</span><span class="p">),</span> 
+                    <span class="n">metrics</span> <span class="o">=</span> <span class="n">accuracy</span><span class="p">,</span>
+                    <span class="n">cbs</span><span class="o">=</span><span class="p">[</span><span class="n">EarlyStoppingCallback</span><span class="p">(</span><span class="n">monitor</span><span class="o">=</span><span class="s">'valid_loss'</span><span class="p">,</span> 
+                                               <span class="n">min_delta</span><span class="o">=</span><span class="mf">0.05</span><span class="p">,</span> 
+                                               <span class="n">patience</span><span class="o">=</span><span class="mi">4</span><span class="p">),</span> 
+                        <span class="n">NoOverfittingCB</span><span class="p">()])</span>
+    <span class="n">learn</span><span class="p">.</span><span class="n">unfreeze</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">learn</span>
+</code></pre></div></div>
+
+<p>We’ll test models with number of input channels ranging from 1 to 5, sampling 20 models for each value. We’ll also save the best model over the whole test so we can probe it later!</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">c_range</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">6</span><span class="p">))</span>
+<span class="n">valid_acc_scores</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="n">valid_bce_scores</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="n">n_samps_per_c</span> <span class="o">=</span> <span class="mi">20</span>
+<span class="n">max_acc</span> <span class="o">=</span> <span class="mi">0</span>
+<span class="n">best_learner</span> <span class="o">=</span> <span class="bp">None</span>
+</code></pre></div></div>
+
+<p>We use the %%capture magic command to supress the immense amount of printing that the next few lines of code will output. No convenient tqdm progress bar here, so if you run this get ready to wait a while!</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">%%</span><span class="n">capture</span>
+<span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">c_range</span><span class="p">:</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_samps_per_c</span><span class="p">):</span>
+        <span class="n">temp_dls</span> <span class="o">=</span> <span class="n">get_random_dls</span><span class="p">()</span>
+        <span class="n">temp_learner</span> <span class="o">=</span> <span class="n">get_learner_with_c</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">temp_dls</span><span class="p">)</span>
+        <span class="n">temp_learner</span><span class="p">.</span><span class="n">fit_one_cycle</span><span class="p">(</span><span class="mi">8</span><span class="p">)</span>
+        <span class="n">temp_valid</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">temp_learner</span><span class="p">.</span><span class="n">validate</span><span class="p">())</span>
+        <span class="n">valid_acc_scores</span><span class="p">.</span><span class="n">append</span><span class="p">([</span><span class="n">c</span><span class="p">,</span> <span class="n">temp_valid</span><span class="p">[</span><span class="mi">1</span><span class="p">]])</span>
+        <span class="n">valid_bce_scores</span><span class="p">.</span><span class="n">append</span><span class="p">([</span><span class="n">c</span><span class="p">,</span> <span class="n">temp_valid</span><span class="p">[</span><span class="mi">0</span><span class="p">]])</span>
+        
+        <span class="k">if</span> <span class="n">temp_valid</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">&gt;</span><span class="n">max_acc</span><span class="p">:</span>
+            <span class="n">max_acc</span> <span class="o">=</span> <span class="n">temp_valid</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+            <span class="n">best_learner</span> <span class="o">=</span> <span class="n">temp_learner</span>
+            
+        <span class="k">del</span> <span class="n">temp_dls</span><span class="p">;</span> <span class="k">del</span> <span class="n">temp_learner</span><span class="p">;</span> <span class="k">del</span> <span class="n">temp_valid</span><span class="p">;</span>
+</code></pre></div></div>
+
+<p>To visualize the results we’ll use a ridgeline-like plot to get a more clear idea about the distribution of model architecture performance over many trials.</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">scipy.stats.kde</span> <span class="kn">import</span> <span class="n">gaussian_kde</span>
+<span class="kn">from</span> <span class="nn">scipy.stats</span> <span class="kn">import</span> <span class="n">norm</span>
+
+<span class="k">def</span> <span class="nf">ridgeline</span><span class="p">(</span><span class="n">data</span><span class="p">,</span>
+              <span class="n">x_vals</span><span class="p">,</span>
+              <span class="n">overlap</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> 
+              <span class="n">labels</span><span class="o">=</span><span class="bp">None</span><span class="p">,</span> 
+              <span class="n">n_points</span><span class="o">=</span><span class="mi">150</span><span class="p">):</span>
+    
+    <span class="n">xx</span> <span class="o">=</span> <span class="n">np</span><span class="p">.</span><span class="n">linspace</span><span class="p">(</span><span class="n">np</span><span class="p">.</span><span class="nb">min</span><span class="p">(</span><span class="n">np</span><span class="p">.</span><span class="n">concatenate</span><span class="p">(</span><span class="n">data</span><span class="p">)),</span>
+                     <span class="n">np</span><span class="p">.</span><span class="nb">max</span><span class="p">(</span><span class="n">np</span><span class="p">.</span><span class="n">concatenate</span><span class="p">(</span><span class="n">data</span><span class="p">)),</span> <span class="n">n_points</span><span class="p">)</span>
+    <span class="n">curves</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">ys</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">d</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">data</span><span class="p">):</span>
+        <span class="n">pdf</span> <span class="o">=</span> <span class="n">gaussian_kde</span><span class="p">(</span><span class="n">d</span><span class="p">)</span>
+        <span class="n">y</span> <span class="o">=</span> <span class="n">i</span><span class="o">*</span><span class="p">(</span><span class="mf">1.0</span><span class="o">-</span><span class="n">overlap</span><span class="p">)</span>
+        <span class="n">ys</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="n">y</span><span class="p">)</span>
+        <span class="n">curve</span> <span class="o">=</span> <span class="n">pdf</span><span class="p">(</span><span class="n">xx</span><span class="p">)</span>
+        <span class="n">plt</span><span class="p">.</span><span class="n">plot</span><span class="p">((</span><span class="n">curve</span><span class="p">)</span><span class="o">/</span><span class="p">(</span><span class="n">np</span><span class="p">.</span><span class="nb">max</span><span class="p">(</span><span class="n">curve</span><span class="p">)</span><span class="o">*</span><span class="mi">3</span><span class="p">)</span> <span class="o">+</span> <span class="n">x_vals</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">xx</span><span class="p">,</span> 
+                 <span class="n">c</span><span class="o">=</span><span class="s">'k'</span><span class="p">,</span> <span class="n">zorder</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="n">data</span><span class="p">)</span><span class="o">-</span><span class="n">i</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">plt</span><span class="p">.</span><span class="n">xticks</span><span class="p">(</span><span class="n">x_vals</span><span class="p">)</span>
+    
+    <span class="k">if</span> <span class="n">labels</span><span class="p">:</span>
+        <span class="n">plt</span><span class="p">.</span><span class="n">yticks</span><span class="p">(</span><span class="n">ys</span><span class="p">,</span> <span class="n">labels</span><span class="p">)</span>
+</code></pre></div></div>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">valid_acc_scores</span> <span class="o">=</span> <span class="n">np</span><span class="p">.</span><span class="n">array</span><span class="p">(</span><span class="n">valid_acc_scores</span><span class="p">)</span>
+<span class="n">valid_bce_scores</span> <span class="o">=</span> <span class="n">np</span><span class="p">.</span><span class="n">array</span><span class="p">(</span><span class="n">valid_bce_scores</span><span class="p">)</span>
+
+<span class="n">c_range</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">6</span><span class="p">))</span>
+<span class="n">ridgeline_data</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">c_range</span><span class="p">:</span>
+    <span class="n">c_mask</span> <span class="o">=</span> <span class="n">valid_bce_scores</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="n">c</span>
+    <span class="k">if</span> <span class="nb">sum</span><span class="p">(</span><span class="n">c_mask</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">ridgeline_data</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="n">valid_bce_scores</span><span class="p">[</span><span class="n">c_mask</span><span class="p">][:,</span> <span class="mi">1</span><span class="p">])</span>
+<span class="n">ridgeline_data</span> <span class="o">=</span> <span class="n">np</span><span class="p">.</span><span class="n">array</span><span class="p">(</span><span class="n">ridgeline_data</span><span class="p">)</span>
+
+<span class="n">ridgeline</span><span class="p">(</span><span class="n">ridgeline_data</span><span class="p">,</span> <span class="n">x_vals</span> <span class="o">=</span> <span class="n">c_range</span><span class="p">)</span>
+<span class="n">plt</span><span class="p">.</span><span class="n">scatter</span><span class="p">(</span><span class="n">valid_bce_scores</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">],</span> 
+            <span class="n">valid_bce_scores</span><span class="p">[:,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">marker</span> <span class="o">=</span> <span class="s">"_"</span><span class="p">)</span>
+<span class="n">plt</span><span class="p">.</span><span class="n">xlabel</span><span class="p">(</span><span class="s">"Number of Masked Input Channels"</span><span class="p">)</span>
+<span class="n">plt</span><span class="p">.</span><span class="n">ylabel</span><span class="p">(</span><span class="s">"Validation BCE"</span><span class="p">)</span>
+<span class="n">plt</span><span class="p">.</span><span class="n">xticks</span><span class="p">(</span><span class="n">c_range</span><span class="p">)</span>
+<span class="n">plt</span><span class="p">.</span><span class="n">show</span><span class="p">()</span>
+</code></pre></div></div>
+
+<p><img src="/img/posts/esp/output_21_0.png" alt="png" /></p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">ridgeline_data</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">c_range</span><span class="p">:</span>
+    <span class="n">c_mask</span> <span class="o">=</span> <span class="n">valid_acc_scores</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="n">c</span>
+    <span class="k">if</span> <span class="nb">sum</span><span class="p">(</span><span class="n">c_mask</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">ridgeline_data</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="n">valid_acc_scores</span><span class="p">[</span><span class="n">c_mask</span><span class="p">][:,</span> <span class="mi">1</span><span class="p">])</span>
+<span class="n">ridgeline_data</span> <span class="o">=</span> <span class="n">np</span><span class="p">.</span><span class="n">array</span><span class="p">(</span><span class="n">ridgeline_data</span><span class="p">)</span>
+
+<span class="n">ridgeline</span><span class="p">(</span><span class="n">ridgeline_data</span><span class="p">,</span> <span class="n">x_vals</span> <span class="o">=</span> <span class="n">c_range</span><span class="p">)</span>
+<span class="n">plt</span><span class="p">.</span><span class="n">scatter</span><span class="p">(</span><span class="n">valid_acc_scores</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">],</span> 
+            <span class="n">valid_acc_scores</span><span class="p">[:,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">marker</span> <span class="o">=</span> <span class="s">"_"</span><span class="p">)</span>
+<span class="n">plt</span><span class="p">.</span><span class="n">xlabel</span><span class="p">(</span><span class="s">"Number of Masked Input Channels"</span><span class="p">)</span>
+<span class="n">plt</span><span class="p">.</span><span class="n">axhline</span><span class="p">(</span><span class="mf">0.61</span><span class="p">,</span> 
+            <span class="n">label</span> <span class="o">=</span> <span class="s">"Yossi Result at 0.64"</span><span class="p">,</span> 
+            <span class="n">c</span> <span class="o">=</span> <span class="s">"b"</span><span class="p">)</span>
+<span class="n">plt</span><span class="p">.</span><span class="n">axhline</span><span class="p">(</span><span class="n">np</span><span class="p">.</span><span class="nb">max</span><span class="p">(</span><span class="n">ridgeline_data</span><span class="p">),</span> 
+            <span class="n">label</span> <span class="o">=</span> <span class="s">"Best Result at {}"</span><span class="p">.</span><span class="nb">format</span><span class="p">(</span><span class="n">np</span><span class="p">.</span><span class="nb">max</span><span class="p">(</span><span class="n">ridgeline_data</span><span class="p">).</span><span class="nb">round</span><span class="p">(</span><span class="n">decimals</span> <span class="o">=</span> <span class="mi">3</span><span class="p">)),</span> 
+            <span class="n">c</span> <span class="o">=</span> <span class="s">"g"</span><span class="p">)</span>
+<span class="n">plt</span><span class="p">.</span><span class="n">axhline</span><span class="p">(</span><span class="mf">0.5</span><span class="p">,</span> 
+            <span class="n">label</span> <span class="o">=</span> <span class="s">"Chance"</span><span class="p">,</span> 
+            <span class="n">c</span> <span class="o">=</span> <span class="s">"r"</span><span class="p">)</span>
+<span class="n">plt</span><span class="p">.</span><span class="n">ylabel</span><span class="p">(</span><span class="s">"Validation ACC"</span><span class="p">)</span>
+<span class="n">plt</span><span class="p">.</span><span class="n">xticks</span><span class="p">(</span><span class="n">c_range</span><span class="p">)</span>
+<span class="n">plt</span><span class="p">.</span><span class="n">legend</span><span class="p">(</span><span class="n">loc</span> <span class="o">=</span> <span class="s">'best'</span><span class="p">,</span> 
+          <span class="n">bbox_to_anchor</span><span class="o">=</span><span class="p">(</span><span class="mf">1.05</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+<span class="n">plt</span><span class="p">.</span><span class="n">title</span><span class="p">(</span><span class="s">"Distributions of Model Accuracy </span><span class="se">\n</span><span class="s"> for Different Input Channel Values </span><span class="se">\n</span><span class="s"> (Predicting the Gender of the Bat)"</span><span class="p">)</span>
+<span class="n">plt</span><span class="p">.</span><span class="n">show</span><span class="p">()</span>
+</code></pre></div></div>
+
+<p><img src="/img/posts/esp/output_22_0.png/output_22_0.png" alt="png" /></p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">print</span><span class="p">(</span><span class="s">"Best learner had {} input channels!"</span><span class="p">.</span><span class="nb">format</span><span class="p">(</span><span class="n">best_learner</span><span class="p">.</span><span class="n">model</span><span class="p">.</span><span class="n">in_c</span><span class="p">))</span>
+</code></pre></div></div>
+
+<p>The best learner had 3 input channels!</p>
+
+:ET

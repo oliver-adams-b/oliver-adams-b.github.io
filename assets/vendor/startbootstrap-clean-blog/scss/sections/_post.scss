@@ -6,7 +6,7 @@
         &:focus,
         &:hover {
             text-decoration: none;
-            color: $primary;
+            color: lightsalmon;
         }
 
         >.post-title {
@@ -17,7 +17,7 @@
 
         >.post-subtitle {
             font-weight: 300;
-            margin: 0 0 10px;
+            margin: 0 0 0px;
         }
     }
 
@@ -28,7 +28,7 @@
         color: $gray-600;
 
         >a {
-            text-decoration: none;
+            text-decoration:none ;
             color: $gray-900;
 
             &:focus,
@@ -46,4 +46,16 @@
             }
         }
     }
+}
+
+code {
+    font-family: Consolas,"courier new";
+    color: crimson;
+    background-color: #f1f1f1;
+    padding: -1px;
+    font-size: 10%;
+    width:min-content;
+  }
+img {
+    width: 100%
 }

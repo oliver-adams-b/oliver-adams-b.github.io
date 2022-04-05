@@ -1,0 +1,188 @@
+I"~[<h1 id="overview">Overview:</h1>
+
+<p>Using assorted webscraping technologies, I pulled thousands of relevant financial earnings reports from various sources. The timestamps and relevant ticker information for these time stamps were populated inside a custom-made SQL database on GCP. These documnents were treated as an investible universe from which names of stocks of interest could be found. Using an ensemble of language models and clustering algorithms, I created a pipeline through which one could query the correlation of any desired metric against the linguistic content of the large database of text.</p>
+
+<h1 id="primary-results">Primary Results:</h1>
+
+<p>The model was used to identify stocks of interest from a large investible universe on the order of 5k tickers. The model offloaded the need for the traditional manual thinning of the investible universe, allowing for more efficient searching of potential portfolio candidates. The model was comprised of a LDA/XGB component which clustered documents in an unsupervised fashion, and a BERT-type head for predicting on these clusters.</p>
+
+<h1 id="code-walkthrough">Code Walkthrough:</h1>
+
+<p>Below is only the “head” of the pipeline, where new transcript data is predicted upon. The full ensemble and library is unavailable for public eyes at this time, but if there is interest just email me!</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">import</span> <span class="nn">sys</span>
+<span class="n">sys</span><span class="p">.</span><span class="n">path</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="s">'/home/oliver/Documents/data_pipeline/'</span><span class="p">)</span>
+<span class="kn">import</span> <span class="nn">sg</span> <span class="c1">#custom library
+</span><span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="n">pd</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="n">np</span>
+
+<span class="n">sys</span><span class="p">.</span><span class="n">path</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="s">"/home/oliver/Documents/data_pipeline/nlp/"</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">transcript_parser</span> <span class="kn">import</span> <span class="n">transcript_parser</span>
+<span class="kn">from</span> <span class="nn">transcript_ensemble_model</span> <span class="kn">import</span> <span class="n">LDA_Model</span><span class="p">,</span> <span class="n">XGB_Classifier_from_LDA</span>
+<span class="kn">from</span> <span class="nn">xgboost</span> <span class="kn">import</span> <span class="n">plot_importance</span>
+
+<span class="k">def</span> <span class="nf">make_predictions</span><span class="p">(</span><span class="n">new_data_dir</span><span class="p">,</span>
+                     <span class="n">new_data_name</span><span class="p">,</span>
+                     <span class="n">num_passes</span><span class="p">,</span>
+                     <span class="n">output_filename</span> <span class="o">=</span> <span class="s">'most_interesting.csv'</span><span class="p">,</span>
+                     <span class="n">disp</span> <span class="o">=</span> <span class="bp">False</span><span class="p">,</span>
+                     <span class="n">use_best</span> <span class="o">=</span> <span class="bp">False</span><span class="p">):</span>
+    <span class="s">"""
+    This script parses through a directory (folder) full of sentieo smart transcripts, and then runs a series
+    of models on the set of smart transcripts. A consensus is taken at the end, giving the transcripts
+    that are most likely interesting and saving this result to a file.
+    """</span>
+
+
+<span class="c1"># =============================================================================
+#     #give the location of the transcripts we want to test
+#     new_data_dir = "/home/oliver/Documents/data_pipeline/nlp/vj_transcripts/"
+#
+#     #give the name of the file of the new data
+#     #This will be the name of the data parsed from the above directory
+#     new_data_name = 'vj_transcript_data.pkl'
+#
+#     #How many different models do you want? More accurate results will come with a
+#     #higher number of passes, compute time is LINEAR with the number of passes (not exponential)
+#     num_passes = 10
+#
+#     #give the desired name of the output file:
+#     output_filename = "most_interesting.csv"
+# =============================================================================
+</span>
+    <span class="c1">#where are all the files we care about, the current working directory.
+</span>    <span class="c1">#should be the locationf all the '...transcript_data.pkl' files
+</span>    <span class="n">current_working_dir</span> <span class="o">=</span> <span class="s">"/home/oliver/Documents/data_pipeline/nlp/"</span>
+
+    <span class="c1">#create an instance of the transcript parser class, to be used to parse through
+</span>    <span class="c1">#the new transcript data in the new_data_dir
+</span>    <span class="n">tp</span> <span class="o">=</span> <span class="n">transcript_parser</span><span class="p">(</span><span class="n">new_data_dir</span><span class="p">)</span>
+
+    <span class="k">try</span><span class="p">:</span>
+        <span class="c1">#try and read the unseen data, fails when file not found
+</span>        <span class="n">unseen_transcript_data</span> <span class="o">=</span> <span class="n">pd</span><span class="p">.</span><span class="n">read_pickle</span><span class="p">(</span><span class="n">current_working_dir</span> <span class="o">+</span> <span class="n">new_data_name</span><span class="p">)</span>
+        <span class="k">del</span> <span class="n">unseen_transcript_data</span><span class="p">[</span><span class="s">'document_text'</span><span class="p">]</span>
+        <span class="k">del</span> <span class="n">unseen_transcript_data</span><span class="p">[</span><span class="s">'document_length'</span><span class="p">]</span>
+    <span class="k">except</span><span class="p">:</span>
+        <span class="c1">#if the file hasn't been found, we use the transcript parser to create the formatted
+</span>        <span class="c1">#transcript data to be used in the model, and we then save the transcript data for
+</span>        <span class="c1">#future runs
+</span>        <span class="n">tp</span><span class="p">.</span><span class="n">pdf_dir_attr</span> <span class="o">=</span> <span class="n">tp</span><span class="p">.</span><span class="n">pdf_dir_attr</span><span class="p">.</span><span class="n">reset_index</span><span class="p">(</span><span class="n">drop</span> <span class="o">=</span> <span class="bp">True</span><span class="p">).</span><span class="n">iloc</span><span class="p">[:,</span> <span class="p">:]</span>
+        <span class="n">unseen_transcript_data</span> <span class="o">=</span> <span class="n">tp</span><span class="p">.</span><span class="n">prepare_data_for_model</span><span class="p">()</span>
+        <span class="n">pd</span><span class="p">.</span><span class="n">to_pickle</span><span class="p">(</span><span class="n">unseen_transcript_data</span><span class="p">,</span> <span class="n">current_working_dir</span> <span class="o">+</span> <span class="n">new_data_name</span><span class="p">)</span>
+
+
+    <span class="s">"""
+    Initialize prediction df, the temporary location of the predictions on the new topics
+    """</span>
+    <span class="n">unseen_transcript_data</span><span class="p">[</span><span class="s">'int_prediction'</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">unseen_transcript_data</span><span class="p">[</span><span class="s">'ticker'</span><span class="p">]]</span>
+
+    <span class="s">"""
+    Get the labeled data that we will use to train the models
+    This is the formatted training data, and should not need to be updated or changed!
+    """</span>
+    <span class="n">labeled_transcript_data</span> <span class="o">=</span> <span class="n">pd</span><span class="p">.</span><span class="n">read_pickle</span><span class="p">(</span><span class="n">current_working_dir</span> <span class="o">+</span> <span class="s">"lda_transcript_data_clrd.pkl"</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">num_passes</span><span class="p">):</span>
+        <span class="k">print</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">********************** pass number {}/{} **********************"</span><span class="p">.</span><span class="nb">format</span><span class="p">(</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">num_passes</span><span class="p">))</span>
+
+        <span class="s">"""
+        Initialize the new LDA model using some parameters
+        """</span>
+        <span class="n">lda</span> <span class="o">=</span> <span class="n">LDA_Model</span><span class="p">(</span><span class="n">labeled_transcript_data</span><span class="p">)</span>
+        <span class="n">lda</span><span class="p">.</span><span class="n">num_topics</span> <span class="o">=</span> <span class="n">np</span><span class="p">.</span><span class="n">random</span><span class="p">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">25</span><span class="p">)</span>
+        <span class="k">print</span><span class="p">(</span><span class="s">"Number of LDA topics = {}"</span><span class="p">.</span><span class="nb">format</span><span class="p">(</span><span class="n">lda</span><span class="p">.</span><span class="n">num_topics</span><span class="p">))</span>
+
+        <span class="k">if</span> <span class="n">use_best</span><span class="p">:</span>
+            <span class="n">lda</span><span class="p">.</span><span class="n">use_current_best_lda_xgb_clrd_model</span><span class="p">(</span><span class="n">lda</span><span class="p">.</span><span class="n">num_topics</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="ow">not</span><span class="p">(</span><span class="n">use_best</span><span class="p">):</span>
+            <span class="n">alpha</span> <span class="o">=</span> <span class="mi">50</span><span class="o">/</span><span class="n">lda</span><span class="p">.</span><span class="n">num_topics</span>
+            <span class="n">eta</span> <span class="o">=</span> <span class="s">'auto'</span>
+            <span class="n">lda</span><span class="p">.</span><span class="n">fitness_function</span><span class="p">([</span><span class="n">alpha</span><span class="p">,</span> <span class="n">eta</span><span class="p">],</span> <span class="n">disp</span><span class="o">=</span><span class="bp">False</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">disp</span><span class="p">:</span>
+            <span class="n">lda</span><span class="p">.</span><span class="n">plot_tsne</span><span class="p">(</span><span class="n">perplexity</span><span class="o">=</span><span class="mi">35</span><span class="p">,</span> <span class="n">two_colors</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+
+        <span class="c1">#predict on the unseen data, adding a column of topic prediction vectors
+</span>        <span class="n">unseen_transcript_data</span> <span class="o">=</span> <span class="n">lda</span><span class="p">.</span><span class="n">predict_on_unseen_data</span><span class="p">(</span><span class="n">unseen_transcript_data</span><span class="p">)</span>
+
+        <span class="s">"""
+        Initialize the XGB Classifier, and provide the updated lda.transcript_data
+        """</span>
+        <span class="c1">#train the xgb classifier on the lda's data
+</span>        <span class="n">xgb</span> <span class="o">=</span> <span class="n">XGB_Classifier_from_LDA</span><span class="p">(</span><span class="n">lda</span><span class="p">.</span><span class="n">transcript_data</span><span class="p">)</span>
+        <span class="n">xgb</span><span class="p">.</span><span class="n">train_model</span><span class="p">(</span><span class="n">disp</span> <span class="o">=</span> <span class="bp">False</span><span class="p">)</span> <span class="c1">#I have never wanted to see it disp
+</span>
+        <span class="c1">#print out the numbers we care about
+</span>        <span class="k">print</span><span class="p">(</span><span class="s">"acc_on_oos_int: {}"</span><span class="p">.</span><span class="nb">format</span><span class="p">(</span><span class="n">sg</span><span class="p">.</span><span class="n">truncate</span><span class="p">(</span><span class="n">xgb</span><span class="p">.</span><span class="n">acc_on_oos_int</span><span class="p">)))</span>
+        <span class="k">print</span><span class="p">(</span><span class="s">"acc_on_val_all: {}"</span><span class="p">.</span><span class="nb">format</span><span class="p">(</span><span class="n">sg</span><span class="p">.</span><span class="n">truncate</span><span class="p">(</span><span class="n">xgb</span><span class="p">.</span><span class="n">acc_on_val_all</span><span class="p">)))</span>
+        <span class="k">print</span><span class="p">(</span><span class="s">"perc_int: {}"</span><span class="p">.</span><span class="nb">format</span><span class="p">(</span><span class="n">sg</span><span class="p">.</span><span class="n">truncate</span><span class="p">(</span><span class="n">xgb</span><span class="p">.</span><span class="n">perc_int</span><span class="p">)))</span>
+
+        <span class="c1">#update the preductions
+</span>        <span class="n">new_predictions</span> <span class="o">=</span> <span class="p">[</span><span class="n">xgb</span><span class="p">.</span><span class="n">xgb_model</span><span class="p">.</span><span class="n">predict</span><span class="p">(</span><span class="n">x</span><span class="p">.</span><span class="n">reshape</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">))[</span><span class="mi">0</span><span class="p">]</span>
+                           <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">unseen_transcript_data</span><span class="p">[</span><span class="s">'topic_predictions'</span><span class="p">]]</span>
+        <span class="n">unseen_transcript_data</span><span class="p">[</span><span class="s">'int_prediction'</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="p">.</span><span class="n">array</span><span class="p">(</span><span class="n">unseen_transcript_data</span><span class="p">[</span><span class="s">'int_prediction'</span><span class="p">])</span> <span class="o">+</span> <span class="n">new_predictions</span>
+
+        <span class="c1">#ranks the most important topic for each run, ranked by information gain
+</span>        <span class="n">xgb_importance</span> <span class="o">=</span> <span class="n">xgb</span><span class="p">.</span><span class="n">get_importance</span><span class="p">()</span>
+        <span class="c1">#print(xgb_importance.head(3))
+</span>
+        <span class="c1">#plot the most important topics and their word distributions
+</span>        <span class="k">if</span> <span class="n">disp</span><span class="p">:</span>
+            <span class="n">plot_importance</span><span class="p">(</span><span class="n">xgb</span><span class="p">.</span><span class="n">xgb_model</span><span class="p">)</span>
+
+            <span class="n">lda</span><span class="p">.</span><span class="n">plot_topic_dist</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="n">xgb_importance</span><span class="p">.</span><span class="n">loc</span><span class="p">[:</span><span class="mi">2</span><span class="p">,</span><span class="s">'feature_number'</span><span class="p">]),</span>
+                                <span class="n">num_words_per_topic</span><span class="o">=</span> <span class="mi">10</span><span class="p">,</span>
+                                <span class="n">width</span> <span class="o">=</span> <span class="mf">0.2</span><span class="p">)</span>
+
+            <span class="n">lda</span><span class="p">.</span><span class="n">plot_topic_word_cloud</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="n">xgb_importance</span><span class="p">.</span><span class="n">loc</span><span class="p">[:</span><span class="mi">3</span><span class="p">,</span><span class="s">'feature_number'</span><span class="p">]),</span> <span class="n">num_words</span> <span class="o">=</span> <span class="mi">50</span><span class="p">)</span>
+
+
+        <span class="c1">#If the accuracy is good for this model, we save and update the last one on file:
+</span>        <span class="k">if</span> <span class="n">lda</span><span class="p">.</span><span class="n">better_than_current_best_lda_xgb_model</span><span class="p">(</span><span class="n">lda</span><span class="p">.</span><span class="n">num_topics</span><span class="p">,</span>
+                                                      <span class="n">xgb</span><span class="p">.</span><span class="n">acc_on_oos_int</span><span class="p">):</span>
+            <span class="n">model_name</span> <span class="o">=</span> <span class="s">"{}_best_clrd_"</span><span class="p">.</span><span class="nb">format</span><span class="p">(</span><span class="n">lda</span><span class="p">.</span><span class="n">num_topics</span><span class="p">)</span>
+            <span class="k">print</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">Found a better model! Updating accordingly..."</span><span class="p">)</span>
+            <span class="n">lda</span><span class="p">.</span><span class="n">update_lda_xgb_model_lookup</span><span class="p">(</span><span class="n">model_name</span><span class="p">,</span>
+                                            <span class="n">xgb</span><span class="p">.</span><span class="n">acc_on_oos_int</span><span class="p">,</span>
+                                            <span class="n">lda</span><span class="p">.</span><span class="n">num_topics</span><span class="p">)</span>
+
+    <span class="c1">#takes the consensus of the model predictions
+</span>    <span class="n">max_prediction_count</span> <span class="o">=</span> <span class="n">np</span><span class="p">.</span><span class="nb">max</span><span class="p">(</span><span class="n">unseen_transcript_data</span><span class="p">[</span><span class="s">'int_prediction'</span><span class="p">])</span>
+    <span class="c1">#'normalize' the int_predictions
+</span>    <span class="n">unseen_transcript_data</span><span class="p">[</span><span class="s">'int_prediction'</span><span class="p">]</span> <span class="o">=</span> <span class="n">unseen_transcript_data</span><span class="p">[</span><span class="s">'int_prediction'</span><span class="p">]</span><span class="o">/</span><span class="n">max_prediction_count</span>
+    <span class="n">most_interesting</span> <span class="o">=</span> <span class="n">unseen_transcript_data</span><span class="p">[</span><span class="n">unseen_transcript_data</span><span class="p">[</span><span class="s">'int_prediction'</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">]</span>
+    <span class="n">most_interesting</span> <span class="o">=</span> <span class="n">most_interesting</span><span class="p">[[</span><span class="s">'ticker'</span><span class="p">,</span><span class="s">'date'</span><span class="p">,</span> <span class="s">'int_prediction'</span><span class="p">]].</span><span class="n">sort_values</span><span class="p">(</span><span class="n">by</span> <span class="o">=</span> <span class="p">[</span><span class="s">'int_prediction'</span><span class="p">,</span> <span class="s">'ticker'</span><span class="p">],</span>
+                                                                                         <span class="n">ascending</span> <span class="o">=</span> <span class="bp">False</span><span class="p">)</span>
+
+    <span class="c1">#print the most interesting documents
+</span>    <span class="k">print</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">********************** Most Intersting Documents **********************"</span><span class="p">.</span><span class="nb">format</span><span class="p">(</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">num_passes</span><span class="p">))</span>
+    <span class="k">print</span><span class="p">(</span><span class="n">most_interesting</span><span class="p">[[</span><span class="s">'ticker'</span><span class="p">,</span> <span class="s">'date'</span><span class="p">,</span> <span class="s">'int_prediction'</span><span class="p">]])</span>
+
+    <span class="c1">#save the most interesting document list
+</span>    <span class="n">most_interesting</span><span class="p">.</span><span class="n">to_csv</span><span class="p">(</span><span class="n">output_filename</span><span class="p">,</span> <span class="n">index</span> <span class="o">=</span> <span class="bp">False</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">most_interesting</span>
+
+
+<span class="c1">#give the location of the transcripts we want to test
+</span><span class="n">new_data_dir</span> <span class="o">=</span> <span class="s">"/home/oliver/Documents/data_pipeline/nlp/vj_transcripts/"</span>
+
+<span class="c1">#give the name of the file of the new data
+#This will be the name of the data parsed from the above directory
+</span><span class="n">new_data_name</span> <span class="o">=</span> <span class="s">'vj_transcript_data.pkl'</span>
+
+<span class="c1">#How many different models do you want? More accurate results will come with a
+#higher number of passes, compute time is LINEAR with the number of passes (not exponential)
+</span><span class="n">num_passes</span> <span class="o">=</span> <span class="mi">1</span>
+
+<span class="c1">#give the desired name of the output file:
+</span><span class="n">output_filename</span> <span class="o">=</span> <span class="s">"most_interesting.csv"</span>
+
+<span class="n">most_interesting</span> <span class="o">=</span> <span class="n">make_predictions</span><span class="p">(</span><span class="n">new_data_dir</span><span class="p">,</span>
+                                    <span class="n">new_data_name</span><span class="p">,</span>
+                                    <span class="n">num_passes</span><span class="p">,</span>
+                                    <span class="n">output_filename</span><span class="p">)</span>
+</code></pre></div></div>
+
+:ET
