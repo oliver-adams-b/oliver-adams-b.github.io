@@ -1,8 +1,0 @@
-I"¦<h1 id="overview">Overview:</h1>
-
-<p>It is trivial to construct the fractal-like attractor for an iterated function system, each IFS defines a unique fractal. However the inverse of this problem is difficult in general; given an an attractor, what is the iterated function system that generates that attractor? This project constructs an IFS which approximates a provided image. The non-trivial part of this project was to construct a dataset for training a model. Using graph-directed constructions of fractals, a dataset of images with equally distributed fractal dimension was constructed.</p>
-
-<h1 id="results">Results:</h1>
-
-<h1 id="code-walkthrough">Code Walkthrough</h1>
-:ET
