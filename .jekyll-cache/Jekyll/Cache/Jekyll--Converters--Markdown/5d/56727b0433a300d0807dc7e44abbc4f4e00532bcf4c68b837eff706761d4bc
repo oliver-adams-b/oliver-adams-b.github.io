@@ -1,0 +1,6 @@
+I"<h1 id="overview">Overview</h1>
+
+<p>I wrote a paper on graph-directed constructions for iterated function systems, you can find a link <a href="https://github.com/oliver-adams-b/IFS_matrix_base8_3D/blob/master/Oliver_Adams_Paper_on_IFS.pdf">here</a>. With this paper I wrote many interactive scripts in Processing which allow one to visually explore the construction of fractals from graphs. The math behind these structures can be complicated, but interacting with these structures gives the viewer something to grasp onto. You can find an interactive 3D version of the code <a href="https://github.com/oliver-adams-b/IFS_matrix_base8_3D">here</a>. A GUI-based script can be found <a href="https://github.com/oliver-adams-b/IFS_matrix_base4_GUI">here</a>.</p>
+
+<h1 id="gallery">Gallery</h1>
+:ET

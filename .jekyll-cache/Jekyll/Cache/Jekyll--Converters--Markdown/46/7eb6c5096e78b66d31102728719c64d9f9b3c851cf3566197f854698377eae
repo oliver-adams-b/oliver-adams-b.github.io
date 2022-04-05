@@ -1,0 +1,317 @@
+I"̷<p><img src="/img/posts/linkage/example_linkage.png" alt="png" /></p>
+
+<h1 id="overview">Overview:</h1>
+
+<p>I created a library of functions which creates and manipulates linkage structures, some examples above. Each linkage structure is defined as a collection of quads, with each quad a four dimensional vector with elements representing the lengths of a simple quad-linkage. Upon fixing one terminal anchor point and articulating the other anchor point, each linkage structure draws its’ own unique trace. In this project, I developed a method of “growing” linkage structures which produce a provided trace.</p>
+
+<h1 id="results">Results:</h1>
+
+<p>The input was a collection of points which when plotted draw a heart, and the output was two linkage structures whose traces together draw a heart! However, the code is capable of taking any number of traces from which linkage structures can be grown to approximate them. Below is an example output. You can find a link to the repository where I maintain this code <a href="https://github.com/oliver-adams-b/linkage_genetic_algorithm">here</a>. The fitness function is a mixture of the directed hausdorff distance, as well as bagged l2.</p>
+
+<p><img src="/img/posts/linkage/linkageheart1.png" alt="png" />
+<img src="/img/posts/linkage/linkageheart2.png" alt="png" />
+<img src="/img/posts/linkage/linkageheart3.png" alt="png" /></p>
+
+<h1 id="code-walkthrough">Code Walkthrough:</h1>
+
+<p>Below is just the library of functions I created in order to efficiently grown traces. The first few methods deal with computing the operating range of any general linkage structure, since when we create linkage structures at random, there is no guarantee that the trace will be well defined.</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="n">np</span>
+<span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="n">plt</span>
+<span class="kn">import</span> <span class="nn">intervals</span> <span class="k">as</span> <span class="n">I</span>
+
+<span class="kn">from</span> <span class="nn">pylab</span> <span class="kn">import</span> <span class="n">rcParams</span>
+
+<span class="kn">from</span> <span class="nn">numba</span> <span class="kn">import</span> <span class="n">njit</span>
+<span class="kn">from</span> <span class="nn">functools</span> <span class="kn">import</span> <span class="n">partial</span>
+
+<span class="n">plt</span><span class="p">.</span><span class="n">rcParams</span><span class="p">[</span><span class="s">'animation.ffmpeg_path'</span><span class="p">]</span> <span class="o">=</span> <span class="s">'/usr/bin/ffmpeg'</span>
+<span class="n">rcParams</span><span class="p">[</span><span class="s">'figure.figsize'</span><span class="p">]</span> <span class="o">=</span> <span class="mi">15</span><span class="p">,</span> <span class="mi">15</span>
+
+<span class="s">"""
+A set of functions that allow us to instantiate linkages, as well as 
+draw the traces for those linkages. 
+"""</span>
+
+<span class="k">def</span> <span class="nf">F_L</span><span class="p">(</span><span class="n">t</span><span class="p">,</span> <span class="n">L</span><span class="p">,</span> <span class="n">tol</span> <span class="o">=</span> <span class="mf">1e-5</span><span class="p">):</span>
+    <span class="n">l1</span><span class="p">,</span> <span class="n">l2</span><span class="p">,</span> <span class="n">l3</span><span class="p">,</span> <span class="n">l4</span> <span class="o">=</span> <span class="n">L</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">L</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">L</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="n">L</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span>
+    <span class="n">tp2</span> <span class="o">=</span> <span class="n">l4</span><span class="o">**</span><span class="mi">2</span> <span class="o">+</span> <span class="n">l3</span><span class="o">**</span><span class="mi">2</span> <span class="o">-</span> <span class="p">((</span><span class="n">l4</span><span class="o">*</span><span class="n">l3</span><span class="o">*</span><span class="p">(</span><span class="n">l1</span><span class="o">**</span><span class="mi">2</span> <span class="o">+</span> <span class="n">l2</span><span class="o">**</span><span class="mi">2</span> <span class="o">-</span> <span class="n">t</span><span class="o">**</span><span class="mi">2</span><span class="p">))</span><span class="o">/</span><span class="p">(</span><span class="n">l1</span><span class="o">*</span><span class="n">l2</span><span class="p">))</span>
+    
+    <span class="c1">#edge cases 
+</span>    <span class="k">if</span> <span class="n">t</span> <span class="o">&lt;=</span> <span class="n">np</span><span class="p">.</span><span class="nb">abs</span><span class="p">(</span><span class="n">l1</span><span class="o">-</span><span class="n">l2</span><span class="p">)</span><span class="o">+</span><span class="n">tol</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">np</span><span class="p">.</span><span class="nb">abs</span><span class="p">(</span><span class="n">l3</span><span class="o">-</span><span class="n">l4</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">t</span> <span class="o">&gt;=</span> <span class="n">l2</span><span class="o">+</span><span class="n">l1</span><span class="o">-</span><span class="n">tol</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">l3</span><span class="o">+</span><span class="n">l4</span>
+    
+    <span class="k">return</span> <span class="n">np</span><span class="p">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">tp2</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">F_inv_L</span><span class="p">(</span><span class="n">t</span><span class="p">,</span> <span class="n">L</span><span class="p">):</span>
+    <span class="c1">#inverse of F_L is the same as a tower with rotated lengths
+</span>    <span class="n">l1</span><span class="p">,</span> <span class="n">l2</span><span class="p">,</span> <span class="n">l3</span><span class="p">,</span> <span class="n">l4</span> <span class="o">=</span> <span class="n">L</span>
+    
+    <span class="k">return</span> <span class="n">F_L</span><span class="p">(</span><span class="n">t</span><span class="p">,</span> <span class="n">L</span> <span class="o">=</span> <span class="p">[</span><span class="n">l4</span><span class="p">,</span> <span class="n">l3</span><span class="p">,</span> <span class="n">l2</span><span class="p">,</span> <span class="n">l1</span><span class="p">])</span>
+
+<span class="k">def</span> <span class="nf">down</span><span class="p">(</span><span class="n">L</span><span class="p">):</span>
+    <span class="n">l1</span><span class="p">,</span> <span class="n">l2</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">L</span>
+    <span class="k">return</span> <span class="p">[</span><span class="nb">abs</span><span class="p">(</span><span class="n">l1</span> <span class="o">-</span> <span class="n">l2</span><span class="p">),</span> <span class="n">l1</span><span class="o">+</span><span class="n">l2</span><span class="p">]</span>
+
+<span class="k">def</span> <span class="nf">up</span><span class="p">(</span><span class="n">L</span><span class="p">):</span>
+    <span class="n">_</span> <span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">l3</span><span class="p">,</span> <span class="n">l4</span> <span class="o">=</span> <span class="n">L</span>
+    <span class="k">return</span> <span class="p">[</span><span class="nb">abs</span><span class="p">(</span><span class="n">l3</span> <span class="o">-</span> <span class="n">l4</span><span class="p">),</span> <span class="n">l3</span><span class="o">+</span><span class="n">l4</span><span class="p">]</span>
+
+<span class="k">def</span> <span class="nf">intersection</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">):</span>
+    <span class="s">"""
+    Returns the intersection of A and B (subsets of the real numbers)
+    """</span>
+    <span class="n">AcapB</span> <span class="o">=</span> <span class="n">I</span><span class="p">.</span><span class="n">closed</span><span class="p">(</span><span class="n">A</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">A</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span> <span class="o">&amp;</span> <span class="n">I</span><span class="p">.</span><span class="n">closed</span><span class="p">(</span><span class="n">B</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">B</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+    
+    <span class="k">if</span> <span class="n">AcapB</span><span class="p">.</span><span class="n">lower</span> <span class="o">==</span> <span class="n">I</span><span class="p">.</span><span class="n">_PInf</span><span class="p">():</span>
+        <span class="k">return</span> <span class="bp">None</span> <span class="c1">#here, None indicates that the intersection is empty
+</span>    <span class="k">return</span> <span class="p">[</span><span class="n">AcapB</span><span class="p">.</span><span class="n">lower</span><span class="p">,</span> <span class="n">AcapB</span><span class="p">.</span><span class="n">upper</span><span class="p">]</span>
+
+<span class="k">def</span> <span class="nf">compose</span><span class="p">(</span><span class="n">f</span><span class="p">,</span> <span class="n">g</span><span class="p">):</span>
+    <span class="k">return</span> <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">f</span><span class="p">(</span><span class="n">g</span><span class="p">(</span><span class="n">x</span><span class="p">))</span>
+
+<span class="k">def</span> <span class="nf">get_1tow_attrs</span><span class="p">(</span><span class="n">L0</span><span class="p">):</span>
+    
+    <span class="n">T</span> <span class="o">=</span> <span class="n">down</span><span class="p">(</span><span class="n">L0</span><span class="p">)</span>
+    <span class="n">FF</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">F_L</span><span class="p">,</span> <span class="n">L</span> <span class="o">=</span> <span class="n">L0</span><span class="p">)</span>
+    <span class="n">Tpp</span> <span class="o">=</span> <span class="n">up</span><span class="p">(</span><span class="n">L0</span><span class="p">)</span>
+    <span class="n">FpFp</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">F_inv_L</span><span class="p">,</span> <span class="n">L</span> <span class="o">=</span> <span class="n">L0</span><span class="p">)</span>
+                   
+    <span class="k">return</span> <span class="p">{</span><span class="s">"T"</span><span class="p">:</span><span class="n">T</span><span class="p">,</span> 
+            <span class="s">"Tpp"</span><span class="p">:</span><span class="n">Tpp</span><span class="p">,</span> 
+            <span class="s">"FF"</span><span class="p">:</span><span class="n">FF</span><span class="p">,</span>
+            <span class="s">"FpFp"</span><span class="p">:</span><span class="n">FpFp</span><span class="p">}</span>
+
+<span class="k">def</span> <span class="nf">align_attr</span><span class="p">(</span><span class="n">attr0</span><span class="p">,</span> <span class="n">attr1</span><span class="p">):</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">k</span> <span class="o">=</span> <span class="n">intersection</span><span class="p">(</span><span class="n">attr0</span><span class="p">[</span><span class="s">"Tpp"</span><span class="p">],</span> <span class="n">attr1</span><span class="p">[</span><span class="s">"T"</span><span class="p">])</span>
+        <span class="n">T</span> <span class="o">=</span> <span class="p">[</span><span class="n">attr0</span><span class="p">[</span><span class="s">"FpFp"</span><span class="p">](</span><span class="n">k</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span> <span class="n">attr0</span><span class="p">[</span><span class="s">"FpFp"</span><span class="p">](</span><span class="n">k</span><span class="p">[</span><span class="mi">1</span><span class="p">])]</span>
+    <span class="k">except</span> <span class="nb">TypeError</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">None</span>
+    
+    <span class="n">FpFp</span> <span class="o">=</span> <span class="n">compose</span><span class="p">(</span><span class="n">attr0</span><span class="p">[</span><span class="s">"FpFp"</span><span class="p">],</span> <span class="n">attr1</span><span class="p">[</span><span class="s">"FpFp"</span><span class="p">])</span>
+    
+    <span class="n">FF</span> <span class="o">=</span> <span class="n">compose</span><span class="p">(</span><span class="n">attr1</span><span class="p">[</span><span class="s">"FF"</span><span class="p">],</span> <span class="n">attr0</span><span class="p">[</span><span class="s">"FF"</span><span class="p">])</span>
+    
+    <span class="n">Tpp</span> <span class="o">=</span> <span class="p">[</span><span class="n">FF</span><span class="p">(</span><span class="n">T</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span> <span class="n">FF</span><span class="p">(</span><span class="n">T</span><span class="p">[</span><span class="mi">1</span><span class="p">])]</span>
+    
+    <span class="k">return</span> <span class="p">{</span><span class="s">"T"</span><span class="p">:</span><span class="n">T</span><span class="p">,</span> 
+            <span class="s">"Tpp"</span><span class="p">:</span><span class="n">Tpp</span><span class="p">,</span> 
+            <span class="s">"FF"</span><span class="p">:</span><span class="n">FF</span><span class="p">,</span>
+            <span class="s">"FpFp"</span><span class="p">:</span><span class="n">FpFp</span><span class="p">}</span>
+
+    
+<span class="k">def</span> <span class="nf">get_t</span><span class="p">(</span><span class="n">lengths</span><span class="p">):</span>
+    
+    <span class="n">attrs</span> <span class="o">=</span> <span class="p">[</span><span class="n">get_1tow_attrs</span><span class="p">(</span><span class="n">L</span><span class="p">)</span> <span class="k">for</span> <span class="n">L</span> <span class="ow">in</span> <span class="n">lengths</span><span class="p">]</span>
+    
+    <span class="k">while</span> <span class="nb">len</span><span class="p">(</span><span class="n">attrs</span><span class="p">)</span><span class="o">&gt;</span><span class="mi">1</span><span class="p">:</span>
+        <span class="n">new_attrs</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">attrs</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">):</span>
+            <span class="n">new_attrs</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="n">align_attr</span><span class="p">(</span><span class="n">attrs</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">attrs</span><span class="p">[</span><span class="n">i</span><span class="o">+</span><span class="mi">1</span><span class="p">]))</span>
+        <span class="n">attrs</span> <span class="o">=</span> <span class="n">new_attrs</span>
+        
+    <span class="k">try</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">attrs</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="s">"T"</span><span class="p">]</span>
+    <span class="k">except</span> <span class="nb">TypeError</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">None</span>
+
+
+<span class="k">def</span> <span class="nf">norm</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">np</span><span class="p">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">x</span><span class="o">**</span><span class="mi">2</span> <span class="o">+</span> <span class="n">y</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span>
+
+<span class="o">@</span><span class="n">njit</span>
+<span class="k">def</span> <span class="nf">get_tri</span><span class="p">(</span><span class="n">p0</span><span class="p">,</span> <span class="n">p1</span><span class="p">,</span> <span class="n">l0</span><span class="p">,</span> <span class="n">l1</span><span class="p">):</span>
+    <span class="s">'''
+    a basic way to solve for the final coordinate of a triangle defined by SSS
+    
+    p1, p2 are numpy arrays representing the 2D location of the
+    points of the linkage. 
+    
+    l1, l2 are the side lengths in question
+    
+    Returns the left-handed solution to the triangle problem, 
+    if the solution doesn't exist, then it will return none.
+    '''</span>
+    
+    <span class="c1"># if (type(p0) == type(None)) or (type(p1) == type(None)):
+</span>    <span class="c1">#     return None
+</span>    
+    <span class="n">x0</span><span class="p">,</span> <span class="n">y0</span> <span class="o">=</span> <span class="n">p0</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">p0</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">x1</span><span class="p">,</span> <span class="n">y1</span> <span class="o">=</span> <span class="n">p1</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">p1</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    
+    <span class="n">d</span> <span class="o">=</span> <span class="n">np</span><span class="p">.</span><span class="n">sqrt</span><span class="p">((</span><span class="n">x0</span> <span class="o">-</span> <span class="n">x1</span><span class="p">)</span><span class="o">**</span><span class="mi">2</span> <span class="o">+</span>  <span class="p">(</span><span class="n">y0</span> <span class="o">-</span> <span class="n">y1</span><span class="p">)</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span>
+    
+    <span class="k">if</span> <span class="n">d</span> <span class="o">&gt;</span> <span class="n">l0</span> <span class="o">+</span> <span class="n">l1</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">None</span>
+    
+    <span class="n">a</span> <span class="o">=</span> <span class="p">(</span><span class="n">l0</span><span class="o">**</span><span class="mi">2</span> <span class="o">-</span> <span class="n">l1</span><span class="o">**</span><span class="mi">2</span> <span class="o">+</span> <span class="n">d</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span><span class="o">/</span><span class="p">(</span><span class="mi">2</span><span class="o">*</span><span class="n">d</span><span class="p">)</span>
+    <span class="n">h</span> <span class="o">=</span> <span class="n">np</span><span class="p">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">l0</span><span class="o">**</span><span class="mi">2</span> <span class="o">-</span> <span class="n">a</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span>
+    
+    <span class="n">x2</span> <span class="o">=</span> <span class="n">x0</span> <span class="o">+</span> <span class="n">a</span><span class="o">*</span><span class="p">(</span><span class="n">x1</span> <span class="o">-</span> <span class="n">x0</span><span class="p">)</span><span class="o">/</span><span class="n">d</span>
+    <span class="n">y2</span> <span class="o">=</span> <span class="n">y0</span> <span class="o">+</span> <span class="n">a</span><span class="o">*</span><span class="p">(</span><span class="n">y1</span> <span class="o">-</span> <span class="n">y0</span><span class="p">)</span><span class="o">/</span><span class="n">d</span>
+    
+    <span class="n">x3</span> <span class="o">=</span> <span class="n">x2</span> <span class="o">-</span> <span class="n">h</span><span class="o">*</span><span class="p">(</span><span class="n">y1</span> <span class="o">-</span> <span class="n">y0</span><span class="p">)</span><span class="o">/</span><span class="n">d</span>
+    <span class="n">y3</span> <span class="o">=</span> <span class="n">y2</span> <span class="o">+</span> <span class="n">h</span><span class="o">*</span><span class="p">(</span><span class="n">x1</span> <span class="o">-</span> <span class="n">x0</span><span class="p">)</span><span class="o">/</span><span class="n">d</span>
+    
+    <span class="k">return</span> <span class="n">np</span><span class="p">.</span><span class="n">asarray</span><span class="p">([</span><span class="n">x3</span><span class="p">,</span> <span class="n">y3</span><span class="p">])</span>
+
+
+<span class="k">def</span> <span class="nf">get_quad</span><span class="p">(</span><span class="n">p0</span><span class="p">,</span> <span class="n">p1</span><span class="p">,</span> <span class="n">L</span><span class="p">):</span>
+    <span class="s">"""
+    p0, p1 are the anchor points
+    
+    L is a list of four lengths. 
+    
+    This basically just makes the scissor shaped thing
+    """</span>
+    <span class="n">l0</span><span class="p">,</span> <span class="n">l1</span><span class="p">,</span> <span class="n">l2</span><span class="p">,</span> <span class="n">l3</span> <span class="o">=</span> <span class="n">L</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">L</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">L</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="n">L</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span>
+    <span class="n">pC</span> <span class="o">=</span> <span class="n">get_tri</span><span class="p">(</span><span class="n">np</span><span class="p">.</span><span class="n">array</span><span class="p">(</span><span class="n">p0</span><span class="p">),</span> <span class="n">np</span><span class="p">.</span><span class="n">array</span><span class="p">(</span><span class="n">p1</span><span class="p">),</span> <span class="n">l0</span><span class="p">,</span> <span class="n">l1</span><span class="p">)</span>
+    
+    <span class="n">norm_p1_pC</span> <span class="o">=</span> <span class="p">(</span><span class="n">pC</span><span class="o">-</span><span class="n">p1</span><span class="p">)</span> <span class="o">/</span> <span class="n">norm</span><span class="p">(</span><span class="n">pC</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">-</span> <span class="n">p1</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">pC</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">-</span> <span class="n">p1</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+    <span class="n">norm_p0_pC</span> <span class="o">=</span> <span class="p">(</span><span class="n">pC</span><span class="o">-</span><span class="n">p0</span><span class="p">)</span> <span class="o">/</span> <span class="n">norm</span><span class="p">(</span><span class="n">pC</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">-</span> <span class="n">p0</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">pC</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">-</span> <span class="n">p0</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+    
+    <span class="n">p2</span> <span class="o">=</span> <span class="p">(</span><span class="n">norm_p0_pC</span><span class="o">*</span><span class="p">(</span><span class="n">l0</span><span class="o">+</span><span class="n">l2</span><span class="p">))</span> <span class="o">+</span> <span class="n">p0</span>
+    <span class="n">p3</span> <span class="o">=</span> <span class="p">(</span><span class="n">norm_p1_pC</span><span class="o">*</span><span class="p">(</span><span class="n">l1</span><span class="o">+</span><span class="n">l3</span><span class="p">))</span> <span class="o">+</span> <span class="n">p1</span>
+
+    <span class="k">return</span> <span class="n">p2</span><span class="p">,</span> <span class="n">p3</span>
+
+<span class="k">def</span> <span class="nf">get_tower</span><span class="p">(</span><span class="n">lengths</span><span class="p">,</span> <span class="n">p0</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">p1</span> <span class="o">=</span> <span class="bp">None</span><span class="p">):</span>
+    
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">T</span> <span class="o">=</span> <span class="n">get_t</span><span class="p">(</span><span class="n">lengths</span><span class="p">)</span>
+    <span class="k">except</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">None</span>
+    
+    <span class="k">if</span> <span class="n">T</span> <span class="ow">is</span> <span class="bp">None</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">None</span>
+    
+    <span class="n">t</span> <span class="o">=</span> <span class="n">np</span><span class="p">.</span><span class="nb">abs</span><span class="p">(</span><span class="n">T</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">-</span> <span class="n">T</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+    
+    <span class="n">D</span> <span class="o">=</span> <span class="n">down</span><span class="p">(</span><span class="n">lengths</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+    <span class="n">d</span> <span class="o">=</span> <span class="n">np</span><span class="p">.</span><span class="nb">abs</span><span class="p">(</span><span class="n">D</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">-</span> <span class="n">D</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+
+    <span class="c1">#note T is a subset of D
+</span>    <span class="k">if</span> <span class="n">t</span><span class="o">/</span><span class="n">d</span> <span class="o">&lt;</span> <span class="mf">0.01</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">None</span>
+    
+    <span class="k">if</span> <span class="nb">type</span><span class="p">(</span><span class="n">p1</span><span class="p">)</span> <span class="o">==</span> <span class="nb">type</span><span class="p">(</span><span class="bp">None</span><span class="p">):</span>
+        <span class="n">p1</span> <span class="o">=</span> <span class="p">[</span><span class="mf">0.5</span><span class="o">*</span><span class="p">(</span><span class="n">T</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">+</span><span class="n">T</span><span class="p">[</span><span class="mi">1</span><span class="p">]),</span> <span class="mi">0</span><span class="p">]</span>
+    
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">p2</span><span class="p">,</span> <span class="n">p3</span> <span class="o">=</span> <span class="n">get_quad</span><span class="p">(</span><span class="n">p0</span><span class="p">,</span> <span class="n">p1</span><span class="p">,</span> <span class="n">lengths</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+    <span class="k">except</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">None</span>
+    
+    <span class="n">tower_verts</span> <span class="o">=</span> <span class="p">[</span><span class="n">p0</span><span class="p">,</span> <span class="n">p1</span><span class="p">,</span> <span class="n">p2</span><span class="p">,</span> <span class="n">p3</span><span class="p">]</span>
+    
+    <span class="k">if</span> <span class="p">(</span><span class="nb">type</span><span class="p">(</span><span class="n">p2</span><span class="p">)</span> <span class="o">==</span> <span class="nb">type</span><span class="p">(</span><span class="bp">None</span><span class="p">))</span> <span class="ow">or</span> <span class="p">(</span><span class="nb">type</span><span class="p">(</span><span class="n">p3</span><span class="p">)</span> <span class="o">==</span> <span class="nb">type</span><span class="p">(</span><span class="bp">None</span><span class="p">)):</span>
+        <span class="k">return</span> <span class="bp">None</span>
+    
+    <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">L</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">lengths</span><span class="p">[</span><span class="mi">1</span><span class="p">:]):</span>
+        <span class="k">if</span> <span class="p">(</span><span class="nb">type</span><span class="p">(</span><span class="n">p2</span><span class="p">)</span> <span class="o">==</span> <span class="nb">type</span><span class="p">(</span><span class="bp">None</span><span class="p">))</span> <span class="ow">or</span> <span class="p">(</span><span class="nb">type</span><span class="p">(</span><span class="n">p3</span><span class="p">)</span> <span class="o">==</span> <span class="nb">type</span><span class="p">(</span><span class="bp">None</span><span class="p">)):</span>
+            <span class="k">return</span> <span class="bp">None</span>
+        
+        <span class="k">if</span> <span class="n">i</span><span class="o">%</span><span class="mi">2</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">p3</span><span class="p">,</span> <span class="n">p2</span> <span class="o">=</span> <span class="n">get_quad</span><span class="p">(</span><span class="n">p3</span><span class="p">,</span> <span class="n">p2</span><span class="p">,</span> <span class="n">L</span><span class="p">)</span>
+            <span class="k">except</span><span class="p">:</span>
+                <span class="k">return</span> <span class="bp">None</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">p2</span><span class="p">,</span> <span class="n">p3</span> <span class="o">=</span> <span class="n">get_quad</span><span class="p">(</span><span class="n">p2</span><span class="p">,</span> <span class="n">p3</span><span class="p">,</span> <span class="n">L</span><span class="p">)</span>
+            <span class="k">except</span><span class="p">:</span>
+                <span class="k">return</span> <span class="bp">None</span>
+        
+        <span class="n">tower_verts</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="n">p2</span><span class="p">)</span>
+        <span class="n">tower_verts</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="n">p3</span><span class="p">)</span>
+    
+    
+    <span class="n">tower_verts</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="n">get_tri</span><span class="p">((</span><span class="n">tower_verts</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> 
+                                <span class="n">tower_verts</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">])[</span><span class="nb">len</span><span class="p">(</span><span class="n">lengths</span><span class="p">)</span><span class="o">%</span><span class="mi">2</span> <span class="o">==</span> <span class="mi">0</span><span class="p">],</span> 
+                               <span class="p">(</span><span class="n">tower_verts</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">],</span> 
+                                <span class="n">tower_verts</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])[</span><span class="nb">len</span><span class="p">(</span><span class="n">lengths</span><span class="p">)</span><span class="o">%</span><span class="mi">2</span> <span class="o">==</span> <span class="mi">0</span><span class="p">],</span> 
+                               <span class="n">lengths</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="o">-</span><span class="mi">2</span><span class="p">],</span> 
+                               <span class="n">lengths</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="o">-</span><span class="mi">1</span><span class="p">]))</span>
+
+    <span class="k">return</span> <span class="n">np</span><span class="p">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">tower_verts</span><span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">disp_tower</span><span class="p">(</span><span class="n">tower</span><span class="p">):</span>
+    <span class="n">tower_verts</span> <span class="o">=</span> <span class="n">get_tower</span><span class="p">(</span><span class="n">tower</span><span class="p">)</span>
+    <span class="c1">#takes the vertices of a tower generated by get_tower
+</span>    <span class="k">if</span> <span class="nb">type</span><span class="p">(</span><span class="n">tower_verts</span><span class="p">)</span> <span class="o">==</span> <span class="nb">type</span><span class="p">(</span><span class="bp">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">None</span>
+    
+    <span class="n">y_points</span><span class="p">,</span> <span class="n">x_points</span> <span class="o">=</span> <span class="n">tower_verts</span><span class="p">[:,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">tower_verts</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">]</span>
+    <span class="n">y_points</span><span class="p">,</span> <span class="n">x_points</span> <span class="o">=</span> <span class="n">np</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="n">y_points</span><span class="p">,</span> <span class="n">y_points</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]),</span> <span class="n">np</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="n">x_points</span><span class="p">,</span> <span class="n">x_points</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+    
+    <span class="n">A0</span><span class="p">,</span> <span class="n">A1</span> <span class="o">=</span> <span class="n">tower_verts</span><span class="p">[</span><span class="mi">1</span><span class="p">][::</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">tower_verts</span><span class="p">[</span><span class="mi">0</span><span class="p">][::</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+    
+    <span class="n">c1</span> <span class="o">=</span> <span class="p">[(</span><span class="bp">False</span><span class="p">,</span> <span class="bp">True</span><span class="p">)[((</span><span class="n">i</span><span class="o">%</span><span class="mi">4</span> <span class="o">==</span> <span class="mi">3</span><span class="p">)</span> <span class="o">^</span> <span class="p">(</span><span class="n">i</span><span class="o">%</span><span class="mi">4</span> <span class="o">==</span> <span class="mi">1</span><span class="p">))]</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">x_points</span><span class="p">))]</span>
+    <span class="n">c2</span> <span class="o">=</span> <span class="p">[(</span><span class="bp">False</span><span class="p">,</span> <span class="bp">True</span><span class="p">)[((</span><span class="n">i</span><span class="o">%</span><span class="mi">4</span> <span class="o">==</span> <span class="mi">2</span><span class="p">)</span> <span class="o">^</span> <span class="p">(</span><span class="n">i</span><span class="o">%</span><span class="mi">4</span> <span class="o">==</span> <span class="mi">0</span><span class="p">))]</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">x_points</span><span class="p">))]</span>
+    
+    <span class="n">plt</span><span class="p">.</span><span class="n">scatter</span><span class="p">(</span><span class="n">x_points</span><span class="p">,</span> <span class="n">y_points</span><span class="p">,</span> <span class="n">s</span> <span class="o">=</span> <span class="mi">100</span><span class="p">)</span>
+    <span class="n">plt</span><span class="p">.</span><span class="n">scatter</span><span class="p">([</span><span class="n">A0</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">A1</span><span class="p">[</span><span class="mi">1</span><span class="p">]],</span> <span class="p">[</span><span class="n">A0</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">A1</span><span class="p">[</span><span class="mi">0</span><span class="p">]],</span> <span class="n">s</span> <span class="o">=</span> <span class="mi">100</span><span class="p">)</span>
+    <span class="n">plt</span><span class="p">.</span><span class="n">plot</span><span class="p">(</span><span class="n">x_points</span><span class="p">[</span><span class="n">c2</span><span class="p">],</span> <span class="n">y_points</span><span class="p">[</span><span class="n">c2</span><span class="p">])</span>
+    <span class="n">plt</span><span class="p">.</span><span class="n">plot</span><span class="p">(</span><span class="n">x_points</span><span class="p">[</span><span class="n">c1</span><span class="p">],</span> <span class="n">y_points</span><span class="p">[</span><span class="n">c1</span><span class="p">])</span>
+    <span class="n">plt</span><span class="p">.</span><span class="n">axis</span><span class="p">(</span><span class="s">"scaled"</span><span class="p">)</span>
+    <span class="n">plt</span><span class="p">.</span><span class="n">axis</span><span class="p">(</span><span class="s">"square"</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">get_trace</span><span class="p">(</span><span class="n">lengths</span><span class="p">,</span> <span class="n">num_samples</span> <span class="o">=</span> <span class="mi">800</span><span class="p">,</span> <span class="n">p0</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">]):</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">T</span> <span class="o">=</span> <span class="n">get_t</span><span class="p">(</span><span class="n">lengths</span><span class="p">)</span>
+    <span class="k">except</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">None</span>
+    
+    <span class="k">if</span> <span class="n">T</span> <span class="ow">is</span> <span class="bp">None</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">None</span>
+    
+    <span class="n">points</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">d</span> <span class="ow">in</span> <span class="n">np</span><span class="p">.</span><span class="n">linspace</span><span class="p">(</span><span class="n">T</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">+</span><span class="mf">0.0001</span><span class="p">,</span> <span class="n">T</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">-</span><span class="mf">0.0001</span><span class="p">,</span> <span class="n">num_samples</span><span class="p">):</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">tow</span> <span class="o">=</span> <span class="n">get_tower</span><span class="p">(</span><span class="n">lengths</span><span class="p">,</span> 
+                            <span class="n">p0</span> <span class="o">=</span> <span class="n">p0</span><span class="p">,</span> 
+                            <span class="n">p1</span> <span class="o">=</span> <span class="p">[</span><span class="n">d</span><span class="p">,</span> <span class="mi">0</span><span class="p">])</span>
+            <span class="n">points</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="n">tow</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+            
+        <span class="k">except</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">np</span><span class="p">.</span><span class="n">array</span><span class="p">(</span><span class="n">points</span><span class="p">)</span>
+        
+
+<span class="k">def</span> <span class="nf">disp_trace</span><span class="p">(</span><span class="n">trace</span><span class="p">,</span>
+               <span class="n">label</span> <span class="o">=</span> <span class="s">''</span><span class="p">,</span>
+               <span class="n">cmap</span> <span class="o">=</span> <span class="s">'winter'</span><span class="p">,</span> 
+               <span class="n">alpha</span> <span class="o">=</span> <span class="mi">1</span><span class="p">):</span>
+    
+    <span class="k">if</span> <span class="n">trace</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">None</span><span class="p">:</span>
+        <span class="n">plt</span><span class="p">.</span><span class="n">scatter</span><span class="p">(</span><span class="n">trace</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">],</span> 
+                    <span class="n">trace</span><span class="p">[:,</span> <span class="mi">1</span><span class="p">],</span> 
+                    <span class="n">c</span> <span class="o">=</span> <span class="n">np</span><span class="p">.</span><span class="n">linspace</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">num</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">trace</span><span class="p">)),</span>
+                    <span class="n">label</span> <span class="o">=</span> <span class="n">label</span><span class="p">,</span>
+                    <span class="n">cmap</span> <span class="o">=</span> <span class="n">cmap</span><span class="p">,</span> 
+                    <span class="n">alpha</span> <span class="o">=</span> <span class="n">alpha</span><span class="p">,</span>
+                    <span class="n">s</span> <span class="o">=</span> <span class="mi">2</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">label</span> <span class="o">!=</span> <span class="s">''</span><span class="p">:</span>
+            <span class="n">plt</span><span class="p">.</span><span class="n">colorbar</span><span class="p">(</span><span class="n">label</span> <span class="o">=</span> <span class="n">label</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">disp_traces</span><span class="p">(</span><span class="n">traces</span><span class="p">,</span> 
+                <span class="n">label</span> <span class="o">=</span> <span class="s">''</span><span class="p">,</span>
+                <span class="n">cmap</span> <span class="o">=</span> <span class="s">'winter'</span><span class="p">):</span>
+    
+    <span class="k">for</span> <span class="n">trace</span> <span class="ow">in</span> <span class="n">traces</span><span class="p">:</span>
+        <span class="n">disp_trace</span><span class="p">(</span><span class="n">trace</span><span class="p">,</span> 
+                   <span class="n">label</span> <span class="o">=</span> <span class="s">''</span><span class="p">,</span>
+                   <span class="n">cmap</span> <span class="o">=</span> <span class="s">'winter'</span><span class="p">)</span>
+        
+
+<span class="k">def</span> <span class="nf">disp_result</span><span class="p">(</span><span class="n">tower</span><span class="p">):</span>
+    <span class="n">trace</span> <span class="o">=</span> <span class="n">get_trace</span><span class="p">(</span><span class="n">tower</span><span class="p">)</span>
+    
+    <span class="n">disp_trace</span><span class="p">(</span><span class="n">trace</span><span class="p">)</span>
+    <span class="n">disp_tower</span><span class="p">(</span><span class="n">tower</span><span class="p">)</span>
+</code></pre></div></div>
+
+:ET

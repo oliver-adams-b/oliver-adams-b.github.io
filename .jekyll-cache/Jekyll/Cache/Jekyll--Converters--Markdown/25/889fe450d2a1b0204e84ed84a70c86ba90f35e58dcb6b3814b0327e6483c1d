@@ -1,0 +1,19 @@
+I"ž<h1 id="overview">Overview</h1>
+
+<p>I wrote a paper on graph-directed constructions for iterated function systems, you can find a link <a href="https://github.com/oliver-adams-b/IFS_matrix_base8_3D/blob/master/Oliver_Adams_Paper_on_IFS.pdf">here</a>. With this paper I wrote many interactive scripts in Processing which allow one to visually explore the construction of fractals from graphs. The math behind these structures can be complicated, but interacting with these structures gives the viewer something to grasp onto. You can find an interactive 3D version of the code <a href="https://github.com/oliver-adams-b/IFS_matrix_base8_3D">here</a>. A GUI-based script can be found <a href="https://github.com/oliver-adams-b/IFS_matrix_base4_GUI">here</a>.</p>
+
+<h1 id="gallery">Gallery</h1>
+
+<p>Below is a screen capture from the base-8 code, which generates three dimensional fractals from 8x8 adjacency matrix:</p>
+
+<p><img src="/img/posts/8functions.PNG" alt="PNG" /></p>
+
+<p>Below is a screen capture of the GUI for constructing base-4 fractals:</p>
+
+<p><img src="/img/posts/ifs/base4gui0.png" alt="png" />
+<img src="/img/posts/ifs/base4gui1.png" alt="png" /></p>
+
+<p>Below is a screen capture of a drag-and-drop style GUI, not using a graph-directed construction, you can actually play with this in browser <a href="https://openprocessing.org/sketch/397800">here</a></p>
+
+<p><img src="img/posts/ifs/unitsquare.png" alt="png" /></p>
+:ET
