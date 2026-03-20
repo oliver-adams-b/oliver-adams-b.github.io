@@ -44,35 +44,41 @@ Here's the thing I kept coming back to, and it has nothing to do with the task i
 
 As the agent was working — queuing up research jobs, generating code, reading external sources — I realized I had no cryptographic guarantee that any of it was what it claimed to be. I was trusting that the model running was the model I thought I'd configured, that the outputs hadn't been modified in transit, that the API provider was honest about what ran. For a toy project, that's fine. For an agent operating in an economy — one that pays for compute, executes contracts, produces outputs that downstream systems depend on — it's a serious problem.
 
-The specific framing that stuck: **when agent A pays node B to run a computation, what guarantees that the computation was actually performed?** Not performed well, not performed honestly in some vague sense — performed at all, by the model specified, on the inputs provided.
+The specific framing that stuck: **when agent A pays node B to run a computation, what guarantees that the computation was actually performed?** Not performed well, not performed honestly in some vague sense — performed at all, on the inputs provided, producing the output returned.
 
-This is an open problem, and the research community is actively working on it through two complementary approaches.
+This is not an LLM problem. It's a fundamental distributed computing problem that predates machine learning by decades. LLMs are just a particularly difficult instance of it — non-deterministic, opaque, and increasingly at the center of consequential decisions.
+
+The general problem is called **verifiable computation**: how do you convince a skeptical verifier that you ran a specific program on specific inputs and got a specific output, without the verifier having to re-run the computation themselves? There are three main classes of solution.
 
 ### Trusted Execution Environments (TEEs)
 
-The hardware approach. A TEE — Intel SGX, AMD SEV, ARM TrustZone — is an isolated compute environment that can produce a cryptographic attestation: a signed proof that specific code ran on specific hardware, with specific inputs, and produced specific outputs. The attestation is verifiable by anyone with the public key, without trusting the provider.
+The hardware approach. A TEE — Intel SGX, AMD SEV, ARM TrustZone — is an isolated compute environment that produces a cryptographic attestation: a signed proof that specific code ran on specific hardware, with specific inputs, and produced specific outputs. Verifiable by anyone with the public key, without trusting the provider.
 
-Applied to AI inference, this means a model provider could issue a proof that output O was produced by model version M, on hardware H, given input I, at timestamp T. The proof is tamper-evident and auditable. TEE-attested inference is deployable today through specialized providers, though not through mainstream APIs.
+Applied to any computation — not just AI — this means the compute node can issue a receipt: "program P ran on input I at time T and produced output O, signed by hardware H." It doesn't prove the computation was *correct*, just that it happened as described. TEE attestation is deployable today.
 
-### Verifiable Computation via ZK Proofs
+### Optimistic Execution with Fraud Proofs
 
-The cryptographic approach. Rather than trusting the hardware, you prove the computation mathematically. Zero-knowledge proofs allow a prover to convince a verifier that they ran a computation correctly, without revealing the inputs, the weights, or the intermediate state.
+The economic approach. Assume the computation is correct by default. Allow any party to challenge it within a dispute window by replaying the computation and comparing results. If fraud is detected, the fraudster is slashed. If not, the assumption stands.
 
-This is harder for large models. Until recently, ZK proofs of neural network inference were feasible for simple architectures but prohibitively expensive for transformer-scale models. That's been changing fast.
+This is how Optimism and Arbitrum handle EVM computation. It works well when computation is deterministic and cheap to replay — which is why it's well-suited to smart contracts but awkward for LLM inference, where non-determinism and cost make replay-based verification difficult.
 
-In late 2025, Lagrange Labs released [DeepProve-1](https://lagrange.dev/blog/deepprove-1), the first production-ready zkML system to generate a cryptographic proof of a full LLM inference — specifically GPT-2. The technical challenge was substantial: transformer architectures involve computation graphs with residual connections, parallel branches, and variable-length inputs that don't map cleanly onto the circuit structures used in ZK proving systems. DeepProve-1 required new layer primitives, new quantization strategies, and new approaches to multi-head attention specifically. GPT-2 and LLaMA share enough architectural similarities that proving LLaMA is reportedly the next milestone.
+### Zero-Knowledge Proofs
 
-Concurrently, [zkGPT](https://eprint.iacr.org/2025/1184) (Qu et al., 2025) proposed a non-interactive ZK proof framework specifically for LLM inference, and a March 2025 arxiv paper, ["A Framework for Cryptographic Verifiability of End-to-End AI Pipelines"](https://arxiv.org/abs/2503.22573), laid out what a fully verifiable AI pipeline would look like — from data sourcing through training, inference, and even model unlearning. The framing there is explicitly about regulation and audit: if a jurisdiction wants to mandate verifiable AI, what does the cryptographic infrastructure look like?
+The cryptographic approach. Rather than trusting hardware or relying on economic incentives, you prove the computation mathematically. A ZK proof allows a prover to convince a verifier that they performed a computation correctly, without revealing the inputs, intermediate state, or — in the case of ML — the model weights.
 
-One prediction from the ICME zkML guide (January 2026) is striking: by the end of 2026, proving costs will drop enough that cryptographic verification becomes standard for any API charging more than $0.01 per call. "Unverified inference" becomes the budget tier.
+For arbitrary programs, zkVMs like [Risc Zero](https://www.risczero.com/) and [SP1 (Succinct Labs)](https://succinct.xyz/) can already prove general program execution. Feed them a compiled program and its inputs, they produce a proof that the program ran and produced the stated output. The proofs are small and fast to verify, even if slow to generate.
 
-### Why This Matters for Agents Specifically
+For LLMs specifically, this is harder — transformer architectures don't map cleanly onto the arithmetic circuits ZK systems operate over. Until recently, proving an LLM inference was either impossible or took prohibitively long. That changed in late 2025 when Lagrange Labs released [DeepProve-1](https://lagrange.dev/blog/deepprove-1), the first production-ready zkML system to generate a cryptographic proof of a full LLM inference — specifically GPT-2. Concurrently, [zkGPT](https://eprint.iacr.org/2025/1184) (Qu et al., 2025) proposed a non-interactive ZK framework for LLM inference, and a March 2025 arxiv paper, ["A Framework for Cryptographic Verifiability of End-to-End AI Pipelines"](https://arxiv.org/abs/2503.22573), laid out the full verification stack — from data sourcing through training, inference, and model unlearning.
+
+One prediction from a January 2026 survey: by end of 2026, proving costs will drop enough that cryptographic verification becomes standard for any API charging more than $0.01 per call. "Unverified inference" becomes the budget tier.
+
+### Why Agents Make This Harder
 
 Single-turn API calls are one thing. Long-running agents with persistent memory, external tool access, and multi-step decision chains are another.
 
-An agent that builds state across sessions, pays for external compute, takes actions in real systems, and produces outputs that feed downstream processes — that's a system where the verification question compounds. Did the model actually read the context it claimed to read? Did the tool call return what the agent reported it returned? Did the summarization preserve the content faithfully? At each step, without verification, you're accumulating trust assumptions.
+An agent that builds state across sessions, pays for external compute, takes actions in real systems, and produces outputs that feed downstream processes — that's a system where unverified trust accumulates at every step. Did the tool call return what the agent reported? Did the summarization preserve the content faithfully? Did the retrieval actually pull from the stated source?
 
-The interesting direction is verification at the agent orchestration layer, not just at the inference layer. TEEs can attest that a specific inference ran. ZK proofs can prove it ran correctly. What the field doesn't yet have cleanly is efficient verification of multi-step reasoning chains — the kind of thing an agent does when it plans across a session, uses tools, and integrates results. That's the open problem.
+The open problem isn't proving individual computations — it's composing proofs across multi-step reasoning chains. TEEs and ZK proofs can attest individual steps. What doesn't yet exist cleanly is efficient verification of the *chain* — the kind of thing an agent does when it plans across a session, uses tools, and integrates results into a coherent output. That's where the interesting work is.
 
 ---
 
